@@ -627,7 +627,7 @@ def build_gpu_map_data(df):
     # Jitter anonymized clusters that share the exact same coordinates.
     # Epoch AI anonymizes Chinese clusters to a single centroid — spread
     # them out so the map shows the real cluster count visually.
-    anon_mask = df.duplicated(subset=["latitude", "longitude"], keep=False)
+    anon_mask = df["Name"].str.contains("Anonymized", case=False, na=False)
     n_anon = anon_mask.sum()
     if n_anon > 1:
         rng = np.random.default_rng(42)  # deterministic for consistency

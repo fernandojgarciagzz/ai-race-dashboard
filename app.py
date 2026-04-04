@@ -1218,7 +1218,7 @@ def update_gpu_map(_n):
         fig.add_annotation(
             x=0.82, y=0.35,
             xref="paper", yref="paper",
-            text=f"China: {n_anon} clusters<br><i>(locations anonymized)</i>",
+            text=f"{n_anon} clusters<br><i>(locations anonymized)</i>",
             showarrow=False,
             font=dict(size=10, color="#EF4444", family="Outfit, system-ui, sans-serif"),
             bgcolor="rgba(17,19,24,0.75)",
