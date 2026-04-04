@@ -37,12 +37,16 @@ _hf_modality_cache_time = 0
 _gpu_clusters_cache = None
 _gpu_clusters_cache_time = 0
 
+_ml_hardware_cache = None
+_ml_hardware_cache_time = 0
+
 CACHE_24H = 86400
 CACHE_5MIN = 300
 
 BENCHMARKS_URL = "https://epoch.ai/data/eci_benchmarks.csv"
 NOTABLE_URL = "https://epoch.ai/data/notable_ai_models.csv"
 GPU_CLUSTERS_URL = "https://epoch.ai/data/gpu_clusters.csv"
+ML_HARDWARE_URL = "https://epoch.ai/data/ml_hardware.csv"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 HF_DOWNLOADS_URL = "https://huggingface.co/api/models?sort=downloads&direction=-1&limit=200&pipeline_tag=text-generation"
 HF_TRENDING_URL = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=15&pipeline_tag=text-generation"
@@ -141,6 +145,34 @@ def get_gpu_clusters():
             return _gpu_clusters_cache
         raise RuntimeError(
             f"Could not fetch GPU clusters and no cache available: {e}"
+        )
+
+
+def get_ml_hardware():
+    """
+    Returns the Epoch AI ML hardware (AI chips) DataFrame.
+    Cached for 24 hours.
+    """
+    global _ml_hardware_cache, _ml_hardware_cache_time
+
+    now = time.time()
+    if _ml_hardware_cache is not None and (now - _ml_hardware_cache_time) < CACHE_24H:
+        return _ml_hardware_cache
+
+    try:
+        response = requests.get(ML_HARDWARE_URL, timeout=30)
+        response.raise_for_status()
+        df = pd.read_csv(io.StringIO(response.text))
+        _ml_hardware_cache = df
+        _ml_hardware_cache_time = now
+        return df
+
+    except Exception as e:
+        if _ml_hardware_cache is not None:
+            print(f"Warning: Failed to refresh ML hardware ({e}). Using stale cache.")
+            return _ml_hardware_cache
+        raise RuntimeError(
+            f"Could not fetch ML hardware and no cache available: {e}"
         )
 
 

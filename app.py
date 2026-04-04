@@ -12,11 +12,12 @@ from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
 import pandas as pd
 from data.fetch import (get_benchmarks, get_openrouter_models, get_hf_top_models,
-                        get_notable_models, get_benchmarks_models, get_gpu_clusters)
+                        get_notable_models, get_benchmarks_models, get_gpu_clusters,
+                        get_ml_hardware)
 from data.process import (build_heatmap_data, build_pricing_data, build_downloads_data,
                           build_timeline_data, filter_flagship_models,
-                          build_context_data, build_gpu_map_data,
-                          build_capabilities_data)
+                          build_chip_dominance_data, build_context_data,
+                          build_gpu_map_data, build_capabilities_data)
 
 app = dash.Dash(
     __name__,
@@ -242,7 +243,37 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # ── Chart 7: GPU cluster world map ───────────────
+                # ── Chart 7: AI chip dominance ────────────────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "Who makes the chips powering AI?",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            id="chips-insight",
+                            className="chart-insight",
+                        ),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="chips-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(
+                            id="chips-updated",
+                            className="last-updated",
+                        ),
+                    ],
+                ),
+
+                # ── Chart 8: GPU cluster world map ───────────────
                 html.Div(
                     className="chart-section",
                     style={"marginTop": "2rem"},
@@ -1097,7 +1128,109 @@ def update_context(_n):
     return graph, insight, updated_text
 
 
-# ── Callback 7: GPU cluster world map ─────────────────────────────
+# ── Callback 7: AI chip dominance ─────────────────────────────────
+
+CHIP_COUNTRY_COLORS = {
+    "US": "#60A5FA",     # blue
+    "China": "#EF4444",  # red
+    "Other": "#6B7280",  # gray
+}
+
+
+@app.callback(
+    Output("chips-container", "children"),
+    Output("chips-insight", "children"),
+    Output("chips-updated", "children"),
+    Input("refresh-24h", "n_intervals"),
+)
+def update_chips(_n):
+    try:
+        raw_df = get_ml_hardware()
+        chip_df, stats = build_chip_dominance_data(raw_df, top_n=10)
+    except Exception as e:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text=f"Could not load chip data: {e}",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#EF4444"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        return graph, "Data unavailable.", ""
+
+    # Reverse for horizontal bar (highest at top)
+    chip_df = chip_df.sort_values("count", ascending=True)
+
+    bar_colors = [CHIP_COUNTRY_COLORS.get(c, "#6B7280") for c in chip_df["country"]]
+
+    fig = go.Figure(
+        data=go.Bar(
+            x=chip_df["count"],
+            y=chip_df["manufacturer"],
+            orientation="h",
+            marker=dict(
+                color=bar_colors,
+                cornerradius=4,
+            ),
+            text=chip_df["count"],
+            textposition="outside",
+            textfont=dict(size=12, color="#D1D5DB", family="IBM Plex Mono, monospace"),
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "AI chips: %{x}<br>"
+                "Origin: %{customdata}"
+                "<extra></extra>"
+            ),
+            customdata=chip_df["country"],
+        )
+    )
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
+        xaxis=dict(
+            visible=False,
+            range=[0, chip_df["count"].max() * 1.2],
+        ),
+        yaxis=dict(
+            tickfont=dict(size=12, color="#D1D5DB"),
+        ),
+        margin=dict(l=160, r=50, t=10, b=10),
+        height=380,
+        autosize=True,
+        bargap=0.25,
+    )
+
+    # Add legend manually as annotations (since bar chart doesn't support grouped legend well)
+    for i, (country, color) in enumerate(CHIP_COUNTRY_COLORS.items()):
+        fig.add_annotation(
+            x=1.0, y=1.0 - i * 0.08,
+            xref="paper", yref="paper",
+            text=f"● {country}",
+            showarrow=False,
+            font=dict(size=11, color=color, family="Outfit, system-ui, sans-serif"),
+            xanchor="right",
+        )
+
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+
+    # Insight
+    insight = (
+        f"{stats['top_maker']} dominates with {stats['top_count']} of "
+        f"{stats['total_chips']} registered AI chips ({stats['top_share']:.0f}%). "
+        f"But the hidden story: China has {stats['cn_makers']} chip manufacturers "
+        f"({stats['cn_chips']} chips) vs {stats['us_makers']} for the US "
+        f"({stats['us_chips']} chips). "
+        f"Blue = US, Red = China."
+    )
+
+    updated_text = "Epoch AI ML hardware  ·  Updated daily"
+
+    return graph, insight, updated_text
+
+
+# ── Callback 8: GPU cluster world map ─────────────────────────────
 GPU_REGION_COLORS = {
     "China": "#EF4444",          # red
     "United States": "#60A5FA",  # blue

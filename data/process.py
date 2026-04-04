@@ -479,7 +479,78 @@ def build_timeline_data(df, benchmarks_models=None):
     return result.reset_index(drop=True)
 
 
-# ── Graph 6: Context window distribution ───────────────────────────
+# ── Graph 6: AI chip dominance ──────────────────────────────────────
+
+# Map manufacturers to their country of origin
+CHIP_MANUFACTURER_COUNTRY = {
+    "NVIDIA": "US",
+    "AMD": "US",
+    "Intel": "US",
+    "Google": "US",
+    "Amazon AWS": "US",
+    "Meta": "US",
+    "Microsoft": "US",
+    "Tesla": "US",
+    "Huawei": "China",
+    "Cambricon": "China",
+    "Kunlunxin Baidu": "China",
+    "MetaX": "China",
+    "Iluvatar CoreX": "China",
+    "Alibaba": "China",
+    "Hygon": "China",
+    "Biren": "China",
+    "Moore Threads (Tencent)": "China",
+    "Sunway": "China",
+    "National University of Defense Technology": "China",
+    "PEZY": "Japan",
+}
+
+
+def build_chip_dominance_data(df, top_n=10):
+    """
+    Aggregates AI chip counts by manufacturer for a bar chart.
+
+    Steps:
+    1. Count chips per manufacturer.
+    2. Assign country of origin per manufacturer.
+    3. Take top N manufacturers.
+    4. Compute US vs China manufacturer and chip counts for insight.
+
+    Returns:
+        chip_df: DataFrame with columns: manufacturer, count, country
+        stats: dict with total chips, US/China breakdown
+    """
+    counts = df["Manufacturer"].value_counts().reset_index()
+    counts.columns = ["manufacturer", "count"]
+
+    counts["country"] = counts["manufacturer"].map(CHIP_MANUFACTURER_COUNTRY).fillna("Other")
+
+    chip_df = counts.head(top_n)
+
+    # Stats for insight
+    total_chips = len(df)
+    us_chips = counts[counts["country"] == "US"]["count"].sum()
+    cn_chips = counts[counts["country"] == "China"]["count"].sum()
+    us_makers = counts[counts["country"] == "US"]["manufacturer"].nunique()
+    cn_makers = counts[counts["country"] == "China"]["manufacturer"].nunique()
+    top_maker = counts.iloc[0]
+    top_share = top_maker["count"] / total_chips * 100
+
+    stats = {
+        "total_chips": total_chips,
+        "us_chips": us_chips,
+        "cn_chips": cn_chips,
+        "us_makers": us_makers,
+        "cn_makers": cn_makers,
+        "top_maker": top_maker["manufacturer"],
+        "top_count": top_maker["count"],
+        "top_share": top_share,
+    }
+
+    return chip_df, stats
+
+
+# ── Graph 7: Context window distribution ───────────────────────────
 
 # Non-model entries on OpenRouter that should be excluded
 _CONTEXT_EXCLUDE_IDS = {"openrouter/auto"}
