@@ -34,11 +34,15 @@ _hf_trending_cache_time = 0
 _hf_modality_cache = None
 _hf_modality_cache_time = 0
 
+_gpu_clusters_cache = None
+_gpu_clusters_cache_time = 0
+
 CACHE_24H = 86400
 CACHE_5MIN = 300
 
 BENCHMARKS_URL = "https://epoch.ai/data/eci_benchmarks.csv"
 NOTABLE_URL = "https://epoch.ai/data/notable_ai_models.csv"
+GPU_CLUSTERS_URL = "https://epoch.ai/data/gpu_clusters.csv"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 HF_DOWNLOADS_URL = "https://huggingface.co/api/models?sort=downloads&direction=-1&limit=200&pipeline_tag=text-generation"
 HF_TRENDING_URL = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=15&pipeline_tag=text-generation"
@@ -112,6 +116,34 @@ def get_notable_models():
         )
 
 
+def get_gpu_clusters():
+    """
+    Returns the Epoch AI GPU clusters DataFrame.
+    Cached for 24 hours (batch data, updated infrequently).
+    """
+    global _gpu_clusters_cache, _gpu_clusters_cache_time
+
+    now = time.time()
+    if _gpu_clusters_cache is not None and (now - _gpu_clusters_cache_time) < CACHE_24H:
+        return _gpu_clusters_cache
+
+    try:
+        response = requests.get(GPU_CLUSTERS_URL, timeout=30)
+        response.raise_for_status()
+        df = pd.read_csv(io.StringIO(response.text))
+        _gpu_clusters_cache = df
+        _gpu_clusters_cache_time = now
+        return df
+
+    except Exception as e:
+        if _gpu_clusters_cache is not None:
+            print(f"Warning: Failed to refresh GPU clusters ({e}). Using stale cache.")
+            return _gpu_clusters_cache
+        raise RuntimeError(
+            f"Could not fetch GPU clusters and no cache available: {e}"
+        )
+
+
 def get_openrouter_models():
     """
     Returns OpenRouter model list as a list of dicts (raw JSON).
@@ -143,6 +175,52 @@ def get_openrouter_models():
         raise RuntimeError(
             f"Could not fetch OpenRouter data and no cache available: {e}"
         )
+
+
+def get_benchmarks_models():
+    """
+    Extracts unique models from the benchmarks CSV for the timeline chart.
+
+    Returns models with: model_group (name), date, org (inferred from name).
+    These supplement notable_ai_models.csv which lacks 2026 models.
+    """
+    df = get_benchmarks()
+
+    # Infer org from model name
+    ORG_PATTERNS = [
+        (["GPT-", "o1", "o3", "o4"], "OpenAI"),
+        (["Claude"], "Anthropic"),
+        (["Gemini"], "Google"),
+        (["Llama", "LLaMA"], "Meta"),
+        (["DeepSeek"], "DeepSeek"),
+        (["Qwen"], "Alibaba"),
+        (["Kimi"], "Moonshot"),
+        (["GLM"], "Zhipu AI"),
+        (["MiniMax"], "MiniMax"),
+        (["Mistral", "Magistral"], "Mistral"),
+        (["Grok"], "xAI"),
+    ]
+
+    def infer_org(name):
+        for prefixes, org in ORG_PATTERNS:
+            for prefix in prefixes:
+                if name.startswith(prefix):
+                    return org
+        return None
+
+    # Get unique model_group + latest date
+    grouped = (
+        df.groupby("model_group")["date"]
+        .max()
+        .reset_index()
+    )
+    grouped["org"] = grouped["model_group"].apply(infer_org)
+    # Drop models where org couldn't be inferred
+    grouped = grouped[grouped["org"].notna()].reset_index(drop=True)
+    grouped["date"] = pd.to_datetime(grouped["date"], errors="coerce")
+    grouped = grouped.dropna(subset=["date"])
+
+    return grouped
 
 
 def get_hf_top_models():

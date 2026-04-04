@@ -12,9 +12,11 @@ from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
 import pandas as pd
 from data.fetch import (get_benchmarks, get_openrouter_models, get_hf_top_models,
-                        get_notable_models)
+                        get_notable_models, get_benchmarks_models, get_gpu_clusters)
 from data.process import (build_heatmap_data, build_pricing_data, build_downloads_data,
-                          build_timeline_data, build_capabilities_data)
+                          build_timeline_data, filter_flagship_models,
+                          build_context_data, build_gpu_map_data,
+                          build_capabilities_data)
 
 app = dash.Dash(
     __name__,
@@ -90,7 +92,37 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # ── Chart 2: Pricing scatter ────────────────────
+                # ── Chart 2: Context window distribution ──────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "How much memory can AI hold?",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            id="context-insight",
+                            className="chart-insight",
+                        ),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="context-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(
+                            id="context-updated",
+                            className="last-updated",
+                        ),
+                    ],
+                ),
+
+                # ── Chart 3: Pricing scatter ────────────────────
                 html.Div(
                     className="chart-section",
                     style={"marginTop": "2rem"},
@@ -205,6 +237,36 @@ app.layout = html.Div(
                         ),
                         html.P(
                             id="capabilities-updated",
+                            className="last-updated",
+                        ),
+                    ],
+                ),
+
+                # ── Chart 7: GPU cluster world map ───────────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "Where is AI compute? A global map",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            id="gpu-map-insight",
+                            className="chart-insight",
+                        ),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="gpu-map-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(
+                            id="gpu-map-updated",
                             className="last-updated",
                         ),
                     ],
@@ -655,6 +717,9 @@ TIMELINE_COLORS = {
     "ByteDance": "#6B7280",
     "NVIDIA": "#9CA3AF",
     "Mistral": "#E5E7EB",
+    "Moonshot": "#374151",
+    "Zhipu AI": "#4B5563",
+    "MiniMax": "#1B2B4B",
 }
 
 
@@ -667,7 +732,8 @@ TIMELINE_COLORS = {
 def update_timeline(_n):
     try:
         raw_df = get_notable_models()
-        df = build_timeline_data(raw_df)
+        benchmarks_models = get_benchmarks_models()
+        df = build_timeline_data(raw_df, benchmarks_models=benchmarks_models)
     except Exception as e:
         empty_fig = go.Figure()
         empty_fig.update_layout(
@@ -683,16 +749,15 @@ def update_timeline(_n):
 
     fig = go.Figure()
 
-    # Only show models with compute data for the Y axis to be meaningful
     df_with_compute = df[df["has_compute"]].copy()
+    df_no_compute = filter_flagship_models(df[~df["has_compute"]])
 
-    # Plot each org as its own trace
+    # ── Scatter: models WITH compute data ──
     for org in TIMELINE_COLORS:
         subset = df_with_compute[df_with_compute["org"] == org]
         if subset.empty:
             continue
 
-        # Dot size from parameters (log scale, 6-22px range)
         params = subset["parameters"].clip(lower=1)
         log_p = np.log10(params.fillna(params.median()))
         p_min, p_max = log_p.min(), log_p.max()
@@ -706,6 +771,7 @@ def update_timeline(_n):
             y=subset["compute_flop"],
             mode="markers",
             name=org,
+            legendgroup=org,
             marker=dict(
                 color=TIMELINE_COLORS[org],
                 size=sizes,
@@ -721,6 +787,49 @@ def update_timeline(_n):
             ),
             customdata=list(zip(subset["model"], subset["org"])),
         ))
+
+    # ── Rug plot: models WITHOUT compute data (e.g. 2026 models) ──
+    # Place them at the bottom of the log Y axis as diamond markers
+    if not df_no_compute.empty and not df_with_compute.empty:
+        # Position just below the minimum compute value on log scale
+        y_min = df_with_compute["compute_flop"].min()
+        rug_y = y_min * 0.15  # slightly below the lowest compute point
+
+        for org in TIMELINE_COLORS:
+            subset = df_no_compute[df_no_compute["org"] == org]
+            if subset.empty:
+                continue
+
+            # Only show legend entry if this org doesn't already have a compute trace
+            has_compute_trace = not df_with_compute[df_with_compute["org"] == org].empty
+
+            fig.add_trace(go.Scatter(
+                x=subset["date"],
+                y=[rug_y] * len(subset),
+                mode="markers+text",
+                name=org,
+                legendgroup=org,
+                showlegend=not has_compute_trace,
+                marker=dict(
+                    color=TIMELINE_COLORS.get(org, "#6B7280"),
+                    size=10,
+                    symbol="diamond",
+                    opacity=0.9,
+                    line=dict(width=1, color="#D1D5DB"),
+                ),
+                text=subset["model"],
+                textposition="top center",
+                textfont=dict(size=8, color="#9CA3AF",
+                              family="IBM Plex Mono, monospace"),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "%{customdata[1]}<br>"
+                    "Date: %{x|%b %Y}<br>"
+                    "Compute: not yet published"
+                    "<extra></extra>"
+                ),
+                customdata=list(zip(subset["model"], subset["org"])),
+            ))
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -754,10 +863,11 @@ def update_timeline(_n):
 
     graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
 
-    # Insight: who has the most models, who has the biggest compute
+    # Insight
     org_counts = df["org"].value_counts()
     most_active = org_counts.index[0]
     most_active_count = org_counts.iloc[0]
+    num_recent = len(df_no_compute)
 
     if not df_with_compute.empty:
         biggest = df_with_compute.loc[df_with_compute["compute_flop"].idxmax()]
@@ -768,10 +878,15 @@ def update_timeline(_n):
             f"({biggest['compute_flop']:.1e} FLOP). "
             f"Bigger dots = more parameters."
         )
+        if num_recent > 0:
+            insight += (
+                f" ◆ diamonds at the bottom = {num_recent} recent models "
+                f"with compute data not yet published."
+            )
     else:
         insight = f"{most_active} leads with {most_active_count} notable models since 2020."
 
-    updated_text = "Epoch AI notable models  ·  Updated daily"
+    updated_text = "Epoch AI notable models + benchmarks  ·  Updated daily"
 
     return graph, insight, updated_text
 
@@ -876,6 +991,274 @@ def update_capabilities(_n):
         insight += f" {', '.join(text_only)}: text only — no multimodal capabilities."
 
     updated_text = "OpenRouter API  ·  Live"
+
+    return graph, insight, updated_text
+
+
+# ── Callback 6: Context window distribution ───────────────────────
+
+CONTEXT_BUCKET_COLORS = {
+    "≤ 8K": "#1B2B4B",
+    "8–32K": "#374151",
+    "32–128K": "#6B7280",
+    "128–256K": "#9CA3AF",
+    "256K–1M": "#D1D5DB",
+    "> 1M": "#F3F4F6",
+}
+
+
+@app.callback(
+    Output("context-container", "children"),
+    Output("context-insight", "children"),
+    Output("context-updated", "children"),
+    Input("refresh-5min", "n_intervals"),
+)
+def update_context(_n):
+    try:
+        raw_models = get_openrouter_models()
+        bucket_df, stats = build_context_data(raw_models)
+    except Exception as e:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text=f"Could not load context data: {e}",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#EF4444"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        return graph, "Data unavailable.", ""
+
+    bar_colors = [CONTEXT_BUCKET_COLORS.get(b, "#374151") for b in bucket_df["bucket"]]
+
+    fig = go.Figure(
+        data=go.Bar(
+            x=bucket_df["count"],
+            y=bucket_df["bucket"],
+            orientation="h",
+            marker=dict(
+                color=bar_colors,
+                cornerradius=4,
+            ),
+            text=bucket_df["count"],
+            textposition="outside",
+            textfont=dict(size=12, color="#D1D5DB", family="IBM Plex Mono, monospace"),
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Models: %{x}<br>"
+                "e.g. %{customdata}"
+                "<extra></extra>"
+            ),
+            customdata=bucket_df["examples"],
+        )
+    )
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
+        xaxis=dict(
+            visible=False,
+            range=[0, bucket_df["count"].max() * 1.2],
+        ),
+        yaxis=dict(
+            tickfont=dict(size=12, color="#D1D5DB"),
+            categoryorder="array",
+            categoryarray=list(reversed(bucket_df["bucket"].tolist())),
+        ),
+        margin=dict(l=90, r=50, t=10, b=10),
+        height=300,
+        autosize=True,
+        bargap=0.3,
+    )
+
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+
+    # Insight
+    total = stats["total_unique"]
+    max_m = stats["max_model"]
+    big_bucket = bucket_df[bucket_df["bucket"] == "> 1M"]["count"].iloc[0]
+    sweet_spot = bucket_df[bucket_df["bucket"] == "32–128K"]["count"].iloc[0]
+
+    def fmt_ctx(tokens):
+        if tokens >= 1_000_000:
+            return f"{tokens / 1_000_000:.1f}M"
+        return f"{tokens // 1_000}K"
+
+    insight = (
+        f"{total} unique model families. "
+        f"The sweet spot is 32–128K tokens ({sweet_spot} models), "
+        f"but {big_bucket} models now exceed 1M tokens — "
+        f"led by {max_m['name']} at {fmt_ctx(max_m['ctx'])}. "
+        f"Context windows as advertised — effective context may vary."
+    )
+
+    updated_text = "OpenRouter API  ·  Live"
+
+    return graph, insight, updated_text
+
+
+# ── Callback 7: GPU cluster world map ─────────────────────────────
+GPU_REGION_COLORS = {
+    "China": "#EF4444",          # red
+    "United States": "#60A5FA",  # blue
+    "Europe": "#2DD4BF",         # teal
+    "Other": "#6B7280",          # gray
+}
+
+
+@app.callback(
+    Output("gpu-map-container", "children"),
+    Output("gpu-map-insight", "children"),
+    Output("gpu-map-updated", "children"),
+    Input("refresh-24h", "n_intervals"),
+)
+def update_gpu_map(_n):
+    try:
+        raw_df = get_gpu_clusters()
+        map_df, stats = build_gpu_map_data(raw_df)
+    except Exception as e:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text=f"Could not load GPU clusters: {e}",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#EF4444"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        return graph, "Data unavailable.", ""
+
+    fig = go.Figure()
+
+    # One trace per region for legend + color
+    for region, color in GPU_REGION_COLORS.items():
+        subset = map_df[map_df["region"] == region]
+        if subset.empty:
+            continue
+
+        # Format power for hover
+        def fmt_power(mw):
+            if pd.notna(mw):
+                return f"{mw:,.0f} MW"
+            return "Unknown"
+
+        def fmt_h100(h):
+            if h >= 1_000_000:
+                return f"{h / 1_000_000:,.1f}M"
+            if h >= 1_000:
+                return f"{h / 1_000:,.0f}K"
+            return f"{h:,.0f}"
+
+        fig.add_trace(go.Scattergeo(
+            lat=subset["lat"],
+            lon=subset["lon"],
+            mode="markers",
+            name=f"{region} ({len(subset)})",
+            marker=dict(
+                color=color,
+                size=subset["dot_size"],
+                opacity=0.7,
+                line=dict(width=0.5, color="rgba(255,255,255,0.3)"),
+                sizemode="diameter",
+            ),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Owner: %{customdata[1]}<br>"
+                "Country: %{customdata[2]}<br>"
+                "Chip: %{customdata[3]}<br>"
+                "H100 equiv: %{customdata[4]}<br>"
+                "Power: %{customdata[5]}<br>"
+                "Status: %{customdata[6]}"
+                "<extra></extra>"
+            ),
+            customdata=list(zip(
+                subset["name"],
+                subset["owner"],
+                subset["country"],
+                subset["chip_type"],
+                [fmt_h100(h) for h in subset["h100_equiv"]],
+                [fmt_power(mw) for mw in subset["power_mw"]],
+                subset["status"],
+            )),
+        ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
+        geo=dict(
+            bgcolor="rgba(0,0,0,0)",
+            showland=True,
+            landcolor="#1F2937",
+            showocean=True,
+            oceancolor="#111318",
+            showcountries=True,
+            countrycolor="#374151",
+            showcoastlines=True,
+            coastlinecolor="#374151",
+            showlakes=False,
+            showframe=False,
+            projection_type="natural earth",
+        ),
+        legend=dict(
+            font=dict(size=11, color="#D1D5DB"),
+            bgcolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="left", x=0,
+        ),
+        margin=dict(l=0, r=0, t=40, b=10),
+        height=500,
+        autosize=True,
+    )
+
+    # Annotation for anonymized China clusters
+    n_anon = map_df["anonymized"].sum()
+    if n_anon > 0:
+        fig.add_annotation(
+            x=0.82, y=0.35,
+            xref="paper", yref="paper",
+            text=f"China: {n_anon} clusters<br><i>(locations anonymized)</i>",
+            showarrow=False,
+            font=dict(size=10, color="#EF4444", family="Outfit, system-ui, sans-serif"),
+            bgcolor="rgba(17,19,24,0.75)",
+            bordercolor="#EF4444",
+            borderwidth=1,
+            borderpad=6,
+        )
+
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+
+    # Insight: geopolitical + who dominates
+    cc = stats["country_counts"]
+    us_count = cc.get("United States of America", 0)
+    cn_count = cc.get("China", 0)
+    total = stats["total_clusters"]
+    total_mw = stats["total_mw"]
+
+    # Top owners
+    top_owners = stats["top_owners"]
+    owner_parts = []
+    for owner, h100 in top_owners.head(3).items():
+        if h100 >= 1_000_000:
+            owner_parts.append(f"{owner} ({h100 / 1_000_000:,.1f}M)")
+        else:
+            owner_parts.append(f"{owner} ({h100 / 1_000:,.0f}K)")
+
+    def fmt_mw(mw):
+        if pd.notna(mw):
+            return f"{mw:,.0f}"
+        return "?"
+
+    insight = (
+        f"{total} GPU clusters mapped across {len(cc)} countries. "
+        f"China leads with {cn_count} clusters vs {us_count} for the US. "
+        f"Total power: {fmt_mw(total_mw)} MW. "
+        f"Biggest investors by H100 equivalents: {', '.join(owner_parts)}. "
+        f"Bigger dots = more compute."
+    )
+
+    updated_text = "Epoch AI GPU clusters  ·  Updated daily"
 
     return graph, insight, updated_text
 

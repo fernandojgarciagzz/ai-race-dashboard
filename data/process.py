@@ -337,6 +337,65 @@ def build_trending_data(raw_models):
 
 # ── Graph 5: Timeline of models by company ────────────────────────
 
+# ── Flagship filter for no-compute models ─────────────────────────
+
+_FAMILY_STRIP = [
+    r'\s*\(.*\)$',
+    r'\s*-Codex-Max$', r'\s*-Codex$', r'\s+Codex$',
+    r'\s+Instant$', r'\s+Fast$', r'\s*-Exp$',
+    r'\s+Image.*$', r'\s+Thinking$',
+    r'\s+Pro$', r'\s+Flash$',
+]
+
+_TIER_KEYWORDS = {
+    'Pro': 4, 'Opus': 4,
+    'Sonnet': 3,
+    'Haiku': 1, 'Flash': 1, 'Fast': 1, 'Instant': 1,
+    'Codex': 1, 'Exp': 1,
+}
+
+
+def filter_flagship_models(df, months=6):
+    """
+    Filters no-compute models to recent flagships only.
+
+    1. Keep only models from the last N months.
+    2. Extract model family by stripping variant suffixes
+       (Codex, Fast, Instant, Flash, Pro, etc.).
+    3. Score each variant by tier (Pro/Opus=4, base=2, Fast/Flash=1).
+    4. Keep only the highest-tier variant per family.
+    """
+    import re
+
+    cutoff = pd.Timestamp.now() - pd.DateOffset(months=months)
+    df = df[df["date"] >= cutoff].copy()
+
+    if df.empty:
+        return df
+
+    def get_family(name):
+        f = name
+        for p in _FAMILY_STRIP:
+            f = re.sub(p, '', f)
+        return f
+
+    def get_tier(name):
+        for kw, score in _TIER_KEYWORDS.items():
+            if kw in name:
+                return score
+        return 2
+
+    df["_family"] = df["model"].apply(get_family)
+    df["_tier"] = df["model"].apply(get_tier)
+
+    df = df.sort_values(["_tier", "date"], ascending=[False, False])
+    df = df.drop_duplicates(subset="_family", keep="first")
+    df = df.drop(columns=["_family", "_tier"])
+
+    return df.reset_index(drop=True)
+
+
+
 # Consolidate org variants into clean names
 TIMELINE_ORG_MAP = {
     "Google": "Google",
@@ -357,20 +416,25 @@ TIMELINE_ORG_MAP = {
     "ByteDance": "ByteDance",
     "NVIDIA": "NVIDIA",
     "Mistral AI": "Mistral",
+    "Moonshot": "Moonshot",
+    "Zhipu AI": "Zhipu AI",
+    "MiniMax": "MiniMax",
 }
 
 TIMELINE_ORGS = list(dict.fromkeys(TIMELINE_ORG_MAP.values()))
 
 
-def build_timeline_data(df):
+def build_timeline_data(df, benchmarks_models=None):
     """
-    Transforms Epoch notable models into a timeline dataset.
+    Transforms Epoch notable models into a timeline dataset, supplemented
+    by models from the benchmarks CSV that aren't in notable_ai_models.
 
     Steps:
     1. Parse publication dates, filter to 2020+.
     2. Normalize org names (merge Google/DeepMind variants, etc.).
     3. Keep only models from top orgs.
     4. Include training compute (FLOP) and parameters where available.
+    5. Merge in benchmark-only models (no compute data) to fill 2026 gap.
 
     Returns:
         pd.DataFrame with columns: model, org, date, compute_flop,
@@ -395,7 +459,220 @@ def build_timeline_data(df):
 
     result["has_compute"] = result["compute_flop"].notna()
 
+    # Merge benchmark-only models (fills the 2026 gap)
+    if benchmarks_models is not None and not benchmarks_models.empty:
+        existing_names = set(result["model"].str.strip().str.lower())
+        new_rows = []
+        for _, row in benchmarks_models.iterrows():
+            if row["model_group"].strip().lower() not in existing_names:
+                new_rows.append({
+                    "model": row["model_group"],
+                    "org": row["org"],
+                    "date": row["date"],
+                    "compute_flop": float("nan"),
+                    "parameters": float("nan"),
+                    "has_compute": False,
+                })
+        if new_rows:
+            result = pd.concat([result, pd.DataFrame(new_rows)], ignore_index=True)
+
     return result.reset_index(drop=True)
+
+
+# ── Graph 6: Context window distribution ───────────────────────────
+
+# Non-model entries on OpenRouter that should be excluded
+_CONTEXT_EXCLUDE_IDS = {"openrouter/auto"}
+
+CONTEXT_BUCKETS = [
+    ("≤ 8K", 0, 8_192),
+    ("8–32K", 8_193, 32_768),
+    ("32–128K", 32_769, 131_072),
+    ("128–256K", 131_073, 262_144),
+    ("256K–1M", 262_145, 1_048_576),
+    ("> 1M", 1_048_577, float("inf")),
+]
+
+
+def build_context_data(raw_models):
+    """
+    Builds a context window distribution from OpenRouter models.
+
+    Steps:
+    1. Exclude non-model entries (openrouter/auto, etc.).
+    2. Deduplicate by model family (strip date suffixes, :free/:extended tags).
+    3. Bucket context_length into human-readable ranges.
+    4. Count models per bucket and collect top models in each.
+
+    Returns:
+        bucket_df: DataFrame with columns: bucket, count, example_models
+        stats: dict with total unique models, max context model, etc.
+    """
+    import re
+
+    # Filter and deduplicate
+    seen_families = {}
+    for m in raw_models:
+        model_id = m.get("id", "")
+
+        if model_id in _CONTEXT_EXCLUDE_IDS:
+            continue
+
+        ctx = m.get("context_length", 0) or 0
+        if ctx <= 0:
+            continue
+
+        # Extract family: strip date suffixes and variant tags
+        base = model_id.split("/")[-1] if "/" in model_id else model_id
+        family = re.sub(r'-\d{4}-\d{2}(-\d{2})?$', '', base)
+        family = re.sub(r':(free|extended|beta|nitro|floor)$', '', family)
+        org = model_id.split("/")[0] if "/" in model_id else ""
+        family_key = f"{org}/{family}"
+
+        # Keep the variant with the largest context per family
+        if family_key not in seen_families or ctx > seen_families[family_key]["ctx"]:
+            seen_families[family_key] = {
+                "id": model_id,
+                "name": m.get("name", model_id),
+                "ctx": ctx,
+                "org": org,
+            }
+
+    models = list(seen_families.values())
+
+    # Bucket counts
+    from collections import OrderedDict
+    bucket_counts = OrderedDict()
+    bucket_examples = OrderedDict()
+    for label, lo, hi in CONTEXT_BUCKETS:
+        in_bucket = [m for m in models if lo <= m["ctx"] <= hi]
+        bucket_counts[label] = len(in_bucket)
+        # Top 3 by context length as examples
+        top = sorted(in_bucket, key=lambda x: -x["ctx"])[:3]
+        bucket_examples[label] = [m["name"] for m in top]
+
+    bucket_df = pd.DataFrame([
+        {"bucket": label, "count": bucket_counts[label],
+         "examples": ", ".join(bucket_examples[label]) if bucket_examples[label] else "—"}
+        for label in bucket_counts
+    ])
+
+    # Stats
+    max_model = max(models, key=lambda x: x["ctx"]) if models else None
+    stats = {
+        "total_unique": len(models),
+        "max_model": max_model,
+    }
+
+    return bucket_df, stats
+
+
+# ── Graph 6: GPU cluster world map ─────────────────────────────────
+
+EU_COUNTRIES = {
+    "France", "Germany", "Italy", "Netherlands", "Spain", "Sweden",
+    "Finland", "Ireland", "Poland", "Denmark", "Belgium", "Austria",
+    "Norway", "Switzerland", "Czech Republic", "Portugal", "Romania",
+    "United Kingdom",
+}
+
+GPU_REGION_MAP = {
+    "United States of America": "United States",
+    "China": "China",
+}
+
+
+def _assign_region(country):
+    if country in GPU_REGION_MAP:
+        return GPU_REGION_MAP[country]
+    if country in EU_COUNTRIES:
+        return "Europe"
+    return "Other"
+
+
+def build_gpu_map_data(df):
+    """
+    Processes GPU cluster data for a world map scatter plot.
+
+    Steps:
+    1. Filter to rows with valid lat/lon.
+    2. Assign region (US, China, Europe, Other) for coloring.
+    3. Compute dot sizes from H100 equivalents (log scale).
+    4. Aggregate owner stats for insight text.
+
+    Returns:
+        map_df: DataFrame with columns for plotting (lat, lon, region, size, hover fields)
+        stats: dict with summary statistics (top owners, country counts, total MW)
+    """
+    import numpy as np
+
+    df = df.copy()
+    df = df[df["latitude"].notna() & df["longitude"].notna()]
+
+    df["region"] = df["Country"].apply(_assign_region)
+
+    # Clean up H100 equivalents
+    df["h100_equiv"] = pd.to_numeric(df["H100 equivalents"], errors="coerce").fillna(0)
+    df["power_mw"] = pd.to_numeric(df["Power Capacity (MW)"], errors="coerce")
+
+    # Dot size from H100 equivalents (log scale, 4-24px)
+    h100 = df["h100_equiv"].clip(lower=1)
+    log_h = np.log10(h100)
+    log_min, log_max = log_h.min(), log_h.max()
+    if log_max > log_min:
+        df["dot_size"] = 4 + (log_h - log_min) / (log_max - log_min) * 20
+    else:
+        df["dot_size"] = 10
+
+    # Jitter anonymized clusters that share the exact same coordinates.
+    # Epoch AI anonymizes Chinese clusters to a single centroid — spread
+    # them out so the map shows the real cluster count visually.
+    anon_mask = df.duplicated(subset=["latitude", "longitude"], keep=False)
+    n_anon = anon_mask.sum()
+    if n_anon > 1:
+        rng = np.random.default_rng(42)  # deterministic for consistency
+        df.loc[anon_mask, "latitude"] = (
+            df.loc[anon_mask, "latitude"] + rng.uniform(-5, 5, size=n_anon)
+        )
+        df.loc[anon_mask, "longitude"] = (
+            df.loc[anon_mask, "longitude"] + rng.uniform(-8, 8, size=n_anon)
+        )
+
+    # Build clean output
+    map_df = pd.DataFrame({
+        "name": df["Name"].fillna("Unknown"),
+        "owner": df["Owner"].fillna("Unknown"),
+        "country": df["Country"].fillna("Unknown"),
+        "region": df["region"],
+        "lat": df["latitude"],
+        "lon": df["longitude"],
+        "h100_equiv": df["h100_equiv"],
+        "power_mw": df["power_mw"],
+        "chip_type": df["Chip type (primary)"].fillna("Not disclosed"),
+        "status": df["Status"].fillna("Unknown"),
+        "dot_size": df["dot_size"],
+        "anonymized": anon_mask.values,
+    })
+
+    # Stats for insight text
+    country_counts = df["Country"].value_counts()
+    top_owners = (
+        df.groupby("Owner")["h100_equiv"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(5)
+    )
+    total_mw = df["power_mw"].sum()
+    total_clusters = len(df)
+
+    stats = {
+        "total_clusters": total_clusters,
+        "total_mw": total_mw,
+        "country_counts": country_counts,
+        "top_owners": top_owners,
+    }
+
+    return map_df, stats
 
 
 # ── Graph 7: Capabilities heatmap ─────────────────────────────────
