@@ -11,11 +11,11 @@ A live, data-driven dashboard tracking the global AI competition across benchmar
 | 1 | **Which AI model is the best right now?** — Benchmark heatmap across Math, Code, Reasoning, Science, Common Sense | Epoch AI `eci_benchmarks.csv` | 24h |
 | 2 | **How much memory can AI hold?** — Context window distribution (≤8K to >1M tokens) | OpenRouter API | 5min |
 | 3 | **How much does AI cost and who's cheapest?** — Pricing scatter (prompt vs completion per 1M tokens) | OpenRouter API | 5min |
-| 4 | **Who's winning the open-source AI race?** — Downloads by organization | HuggingFace API | 5min |
-| 5 | **Who's investing most in winning this race?** — Model release timeline with training compute | Epoch AI `notable_ai_models.csv` + `eci_benchmarks.csv` | 24h |
-| 6 | **What can each company's AI actually do?** — Multimodal capabilities heatmap | OpenRouter API | 5min |
-| 7 | **Who makes the chips powering AI?** — Chip manufacturer dominance (NVIDIA 52%, US vs China) | Epoch AI `ml_hardware.csv` | 24h |
-| 8 | **Where is AI compute? A global map** — 691 GPU clusters plotted on a world map | Epoch AI `gpu_clusters.csv` | 24h |
+| 4 | **Who's investing most in winning this race?** — Model release timeline with training compute | Epoch AI `notable_ai_models.csv` + `eci_benchmarks.csv` | 24h |
+| 5 | **What can each company's AI actually do?** — Multimodal capabilities heatmap | OpenRouter API | 5min |
+| 6 | **Who makes the chips powering AI?** — Chip manufacturer dominance (NVIDIA 52%, US vs China) | Epoch AI `ml_hardware.csv` | 24h |
+| 7 | **Where is AI compute? A global map** — 691 GPU clusters plotted on a world map | Epoch AI `gpu_clusters.csv` | 24h |
+| 8 | **Who's winning the open-source AI race?** — Downloads by organization | HuggingFace API | 5min |
 
 ## Data Sources
 

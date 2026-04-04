@@ -77,6 +77,11 @@ app.layout = html.Div(
                             "Which AI model is the best right now?",
                             className="chart-title",
                         ),
+                        html.P(
+                            "Top 8 models ranked by average score across 5 categories. "
+                            "Each cell shows a percentage — ★ marks the best in each column.",
+                            className="chart-description",
+                        ),
                         html.P(id="chart-insight", className="chart-insight"),
                         html.Div(id="kpi-row", className="kpi-row"),
                         dcc.Loading(
@@ -101,6 +106,12 @@ app.layout = html.Div(
                         html.H2(
                             "How much memory can AI hold?",
                             className="chart-title",
+                        ),
+                        html.P(
+                            "Context window = how much text a model can process at once. "
+                            "Longer bars mean more models in that range. "
+                            "Hover for examples. Advertised maximums — effective context may vary.",
+                            className="chart-description",
                         ),
                         html.P(
                             id="context-insight",
@@ -133,6 +144,11 @@ app.layout = html.Div(
                             className="chart-title",
                         ),
                         html.P(
+                            "Each dot is a model. X = prompt cost, Y = completion cost (per 1M tokens). "
+                            "Bigger dots = larger context window. Both axes use log scale.",
+                            className="chart-description",
+                        ),
+                        html.P(
                             id="pricing-insight",
                             className="chart-insight",
                         ),
@@ -153,36 +169,6 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # ── Chart 3: Downloads by org ───────────────────
-                html.Div(
-                    className="chart-section",
-                    style={"marginTop": "2rem"},
-                    children=[
-                        html.H2(
-                            "Who's winning the open-source AI race?",
-                            className="chart-title",
-                        ),
-                        html.P(
-                            id="downloads-insight",
-                            className="chart-insight",
-                        ),
-                        dcc.Loading(
-                            type="default",
-                            color="#9CA3AF",
-                            children=[
-                                html.Div(
-                                    id="downloads-container",
-                                    children=[loading_skeleton],
-                                )
-                            ],
-                        ),
-                        html.P(
-                            id="downloads-updated",
-                            className="last-updated",
-                        ),
-                    ],
-                ),
-
                 # ── Chart 4: Model release timeline ─────────────
                 html.Div(
                     className="chart-section",
@@ -191,6 +177,12 @@ app.layout = html.Div(
                         html.H2(
                             "Who's investing most in winning this race?",
                             className="chart-title",
+                        ),
+                        html.P(
+                            "Every notable AI model since 2020, plotted by date and training compute (FLOP). "
+                            "Bigger dots = more parameters. "
+                            "◆ diamonds = recent models whose compute hasn't been published yet.",
+                            className="chart-description",
                         ),
                         html.P(
                             id="timeline-insight",
@@ -223,6 +215,11 @@ app.layout = html.Div(
                             className="chart-title",
                         ),
                         html.P(
+                            "Each cell shows how many models from that company support a given modality. "
+                            "Brighter = more models. Zero means no support at all.",
+                            className="chart-description",
+                        ),
+                        html.P(
                             id="capabilities-insight",
                             className="chart-insight",
                         ),
@@ -251,6 +248,12 @@ app.layout = html.Div(
                         html.H2(
                             "Who makes the chips powering AI?",
                             className="chart-title",
+                        ),
+                        html.P(
+                            "Every registered AI chip by manufacturer. "
+                            "Blue = US company, Red = China, Gray = other. "
+                            "Includes GPUs, TPUs, and custom ASICs.",
+                            className="chart-description",
                         ),
                         html.P(
                             id="chips-insight",
@@ -283,6 +286,12 @@ app.layout = html.Div(
                             className="chart-title",
                         ),
                         html.P(
+                            "Every known GPU cluster in the world, plotted by location. "
+                            "Bigger dots = more compute (H100 equivalents). "
+                            "Blue = US, Red = China, Teal = Europe. Hover for details.",
+                            className="chart-description",
+                        ),
+                        html.P(
                             id="gpu-map-insight",
                             className="chart-insight",
                         ),
@@ -298,6 +307,41 @@ app.layout = html.Div(
                         ),
                         html.P(
                             id="gpu-map-updated",
+                            className="last-updated",
+                        ),
+                    ],
+                ),
+
+                # ── Chart 8: Downloads by org ─────────────────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "Who's winning the open-source AI race?",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            "Total downloads across HuggingFace's top 200 text-generation models, "
+                            "grouped by organization. Longer bars = more downloads.",
+                            className="chart-description",
+                        ),
+                        html.P(
+                            id="downloads-insight",
+                            className="chart-insight",
+                        ),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="downloads-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(
+                            id="downloads-updated",
                             className="last-updated",
                         ),
                     ],
@@ -352,7 +396,7 @@ def update_heatmap(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", "", []
 
     models = heatmap_df.index.tolist()
@@ -445,14 +489,15 @@ def update_heatmap(_n):
         font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
         yaxis=dict(autorange="reversed",
                    tickfont=dict(size=11.5, family="IBM Plex Mono, monospace", color="#D1D5DB"),
-                   side="left"),
-        xaxis=dict(tickfont=dict(size=12, color="#9CA3AF"), side="top"),
+                   side="left", fixedrange=True),
+        xaxis=dict(tickfont=dict(size=12, color="#9CA3AF"), side="top", fixedrange=True),
+        dragmode=False,
         margin=dict(l=160, r=30, t=35, b=15),
         height=400,
         autosize=True,
     )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight
     top_model = models[0]
@@ -461,8 +506,7 @@ def update_heatmap(_n):
     best_val = top_scores.max()
     insight = (
         f"{top_model} leads overall, scoring highest in {best_cat} "
-        f"({best_val:.1f}%). No single model dominates every category "
-        f"— the ★ marks each column's winner."
+        f"({best_val:.1f}%). No single model dominates every category."
     )
 
     updated_text = f"Epoch AI  ·  {last_date}"
@@ -518,7 +562,7 @@ def update_pricing(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     fig = go.Figure()
@@ -580,6 +624,7 @@ def update_pricing(_n):
             gridcolor="rgba(255,255,255,0.06)",
             zeroline=False,
             type="log",
+            fixedrange=True,
         ),
         yaxis=dict(
             title=dict(text="Completion price ($ per 1M tokens)",
@@ -588,7 +633,9 @@ def update_pricing(_n):
             gridcolor="rgba(255,255,255,0.06)",
             zeroline=False,
             type="log",
+            fixedrange=True,
         ),
+        dragmode=False,
         legend=dict(
             font=dict(size=11, color="#D1D5DB"),
             bgcolor="rgba(0,0,0,0)",
@@ -604,7 +651,7 @@ def update_pricing(_n):
         autosize=True,
     )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight: find the cheapest model overall (lowest prompt + completion)
     df["total_1m"] = df["prompt_1m"] + df["completion_1m"]
@@ -615,8 +662,7 @@ def update_pricing(_n):
         f"{total_models} models compared. "
         f"Cheapest overall: {cheapest['name']} "
         f"(${cheapest['prompt_1m']:.2f} prompt + "
-        f"${cheapest['completion_1m']:.2f} completion per 1M tokens). "
-        f"Bigger dots = larger context window. Log scale."
+        f"${cheapest['completion_1m']:.2f} completion per 1M tokens)."
     )
 
     updated_text = "OpenRouter API  ·  Live"
@@ -660,7 +706,7 @@ def update_downloads(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     # Reverse for horizontal bar chart (highest at top)
@@ -704,19 +750,21 @@ def update_downloads(_n):
         font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
         xaxis=dict(
             visible=False,
-            # Extra room for the text labels outside bars
             range=[0, df["downloads"].max() * 1.25],
+            fixedrange=True,
         ),
         yaxis=dict(
             tickfont=dict(size=12, color="#D1D5DB"),
+            fixedrange=True,
         ),
+        dragmode=False,
         margin=dict(l=120, r=50, t=10, b=10),
         height=400,
         autosize=True,
         bargap=0.25,
     )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight
     top_org = df.iloc[-1]  # last row is highest (we sorted ascending)
@@ -725,8 +773,7 @@ def update_downloads(_n):
     insight = (
         f"{top_org['display_name']} leads with {fmt(top_org['downloads'])} downloads "
         f"across {top_org['model_count']} models in the top 200. "
-        f"Total across top 12 orgs: {fmt(total_downloads)}. "
-        f"Based on HuggingFace text-generation models."
+        f"Total across top 12 orgs: {fmt(total_downloads)}."
     )
 
     updated_text = "HuggingFace API  ·  Live"
@@ -773,7 +820,7 @@ def update_timeline(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     import numpy as np
@@ -871,6 +918,7 @@ def update_timeline(_n):
                        font=dict(size=11, color="#9CA3AF")),
             tickfont=dict(size=10, color="#6B7280"),
             gridcolor="rgba(255,255,255,0.06)",
+            fixedrange=True,
         ),
         yaxis=dict(
             title=dict(text="Training compute (FLOP)",
@@ -878,7 +926,9 @@ def update_timeline(_n):
             tickfont=dict(size=10, color="#6B7280"),
             gridcolor="rgba(255,255,255,0.06)",
             type="log",
+            fixedrange=True,
         ),
+        dragmode=False,
         legend=dict(
             font=dict(size=11, color="#D1D5DB"),
             bgcolor="rgba(0,0,0,0)",
@@ -892,7 +942,7 @@ def update_timeline(_n):
         autosize=True,
     )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight
     org_counts = df["org"].value_counts()
@@ -906,13 +956,11 @@ def update_timeline(_n):
             f"Since 2020, {most_active} has released {most_active_count} notable models "
             f"— more than anyone else. The largest training run recorded: "
             f"{biggest['model']} by {biggest['org']} "
-            f"({biggest['compute_flop']:.1e} FLOP). "
-            f"Bigger dots = more parameters."
+            f"({biggest['compute_flop']:.1e} FLOP)."
         )
         if num_recent > 0:
             insight += (
-                f" ◆ diamonds at the bottom = {num_recent} recent models "
-                f"with compute data not yet published."
+                f" {num_recent} recent models are awaiting compute data."
             )
     else:
         insight = f"{most_active} leads with {most_active_count} notable models since 2020."
@@ -941,7 +989,7 @@ def update_capabilities(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     from data.process import CAPABILITY_COLUMNS
@@ -996,17 +1044,20 @@ def update_capabilities(_n):
             tickfont=dict(size=12, color="#D1D5DB"),
             side="left",
             autorange="reversed",
+            fixedrange=True,
         ),
         xaxis=dict(
             tickfont=dict(size=11, color="#9CA3AF"),
             side="top",
+            fixedrange=True,
         ),
+        dragmode=False,
         margin=dict(l=90, r=15, t=35, b=15),
         height=400,
         autosize=True,
     )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight: find most versatile org (most non-zero capabilities)
     df["num_caps"] = (df[caps] > 0).sum(axis=1)
@@ -1056,7 +1107,7 @@ def update_context(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     bar_colors = [CONTEXT_BUCKET_COLORS.get(b, "#374151") for b in bucket_df["bucket"]]
@@ -1090,19 +1141,22 @@ def update_context(_n):
         xaxis=dict(
             visible=False,
             range=[0, bucket_df["count"].max() * 1.2],
+            fixedrange=True,
         ),
         yaxis=dict(
             tickfont=dict(size=12, color="#D1D5DB"),
             categoryorder="array",
             categoryarray=list(reversed(bucket_df["bucket"].tolist())),
+            fixedrange=True,
         ),
+        dragmode=False,
         margin=dict(l=90, r=50, t=10, b=10),
         height=300,
         autosize=True,
         bargap=0.3,
     )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight
     total = stats["total_unique"]
@@ -1119,8 +1173,7 @@ def update_context(_n):
         f"{total} unique model families. "
         f"The sweet spot is 32–128K tokens ({sweet_spot} models), "
         f"but {big_bucket} models now exceed 1M tokens — "
-        f"led by {max_m['name']} at {fmt_ctx(max_m['ctx'])}. "
-        f"Context windows as advertised — effective context may vary."
+        f"led by {max_m['name']} at {fmt_ctx(max_m['ctx'])}."
     )
 
     updated_text = "OpenRouter API  ·  Live"
@@ -1155,7 +1208,7 @@ def update_chips(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     # Reverse for horizontal bar (highest at top)
@@ -1192,10 +1245,13 @@ def update_chips(_n):
         xaxis=dict(
             visible=False,
             range=[0, chip_df["count"].max() * 1.2],
+            fixedrange=True,
         ),
         yaxis=dict(
             tickfont=dict(size=12, color="#D1D5DB"),
+            fixedrange=True,
         ),
+        dragmode=False,
         margin=dict(l=160, r=50, t=10, b=10),
         height=380,
         autosize=True,
@@ -1213,16 +1269,15 @@ def update_chips(_n):
             xanchor="right",
         )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight
     insight = (
         f"{stats['top_maker']} dominates with {stats['top_count']} of "
         f"{stats['total_chips']} registered AI chips ({stats['top_share']:.0f}%). "
-        f"But the hidden story: China has {stats['cn_makers']} chip manufacturers "
+        f"The hidden story: China has {stats['cn_makers']} chip manufacturers "
         f"({stats['cn_chips']} chips) vs {stats['us_makers']} for the US "
-        f"({stats['us_chips']} chips). "
-        f"Blue = US, Red = China."
+        f"({stats['us_chips']} chips)."
     )
 
     updated_text = "Epoch AI ML hardware  ·  Updated daily"
@@ -1257,7 +1312,7 @@ def update_gpu_map(_n):
                               showarrow=False, font=dict(size=14, color="#EF4444"))],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True})
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
         return graph, "Data unavailable.", ""
 
     fig = go.Figure()
@@ -1340,6 +1395,7 @@ def update_gpu_map(_n):
             yanchor="bottom", y=1.02,
             xanchor="left", x=0,
         ),
+        dragmode=False,
         margin=dict(l=0, r=0, t=40, b=10),
         height=500,
         autosize=True,
@@ -1360,7 +1416,7 @@ def update_gpu_map(_n):
             borderpad=6,
         )
 
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True})
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
 
     # Insight: geopolitical + who dominates
     cc = stats["country_counts"]
@@ -1384,11 +1440,10 @@ def update_gpu_map(_n):
         return "?"
 
     insight = (
-        f"{total} GPU clusters mapped across {len(cc)} countries. "
+        f"{total} GPU clusters across {len(cc)} countries. "
         f"China leads with {cn_count} clusters vs {us_count} for the US. "
         f"Total power: {fmt_mw(total_mw)} MW. "
-        f"Biggest investors by H100 equivalents: {', '.join(owner_parts)}. "
-        f"Bigger dots = more compute."
+        f"Biggest investors by H100 equivalents: {', '.join(owner_parts)}."
     )
 
     updated_text = "Epoch AI GPU clusters  ·  Updated daily"
