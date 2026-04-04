@@ -19,9 +19,9 @@ A live, data-driven dashboard tracking the global AI competition across benchmar
 
 ## Data Sources
 
-- **[Epoch AI](https://epoch.ai)** (CC BY 4.0) — Benchmarks, notable models, GPU clusters
+- **[Epoch AI](https://epoch.ai)** (CC BY 4.0) — Benchmarks, notable models, GPU clusters, ML hardware
 - **[OpenRouter](https://openrouter.ai)** — Model pricing, context lengths, capabilities
-- **[HuggingFace](https://huggingface.co)** — Download counts, trending models
+- **[HuggingFace](https://huggingface.co)** — Download counts
 
 All data is fetched live at runtime. No static datasets are stored in the repo.
 
@@ -58,8 +58,10 @@ startCommand: gunicorn app:server --bind 0.0.0.0:$PORT
 
 ## Notable design decisions
 
-- **No API keys required** — All data sources are public APIs or CC-licensed CSVs.
-- **No static datasets** — Everything is fetched live, so the dashboard stays current without manual updates.
-- **Timeline 2026 gap** — `notable_ai_models.csv` ends in Dec 2025. Recent models (GPT-5.4 Pro, Claude Opus 4.6, Gemini 3.1 Pro, etc.) are supplemented from `eci_benchmarks.csv` and displayed as diamond markers with "compute not yet published".
+- **Zero maintenance** — All data is fetched live from public APIs. No static datasets, no API keys, no manual updates.
+- **Two-layer explanations** — Each chart has a static description (how to read it) and a dynamic insight (what the data says), both generated from live data.
+- **Mobile-friendly** — All charts have zoom/drag/pinch disabled (`fixedrange`, `dragmode=False`, `scrollZoom=False`) to prevent accidental zoom on touch devices.
+- **Timeline 2026 gap** — `notable_ai_models.csv` ends in Dec 2025. Recent models (GPT-5.4 Pro, Claude Opus 4.6, Gemini 3.1 Pro, etc.) are supplemented from `eci_benchmarks.csv` and displayed as diamond markers. A flagship filter deduplicates model families and keeps only the last 6 months.
 - **China GPU clusters** — Epoch AI anonymizes Chinese cluster locations to a single centroid. The map applies jitter to visualize all 253 clusters with an annotation noting the anonymization.
 - **Context window dedup** — OpenRouter lists multiple variants of the same model. The context chart deduplicates by family and keeps the variant with the largest context window.
+- **Chip geopolitics** — Manufacturer country of origin is mapped manually (`CHIP_MANUFACTURER_COUNTRY` in process.py) to color bars by US/China/Other.
