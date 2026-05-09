@@ -11,18 +11,149 @@ import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
 import pandas as pd
+from datetime import datetime, timezone
 from data.fetch import (get_benchmarks, get_openrouter_models, get_hf_top_models,
                         get_notable_models, get_benchmarks_models, get_gpu_clusters,
-                        get_ml_hardware)
+                        get_ml_hardware, get_last_fetch_time,
+                        get_hf_trending, get_hf_modality_champions)
 from data.process import (build_heatmap_data, build_pricing_data, build_downloads_data,
                           build_timeline_data, filter_flagship_models,
                           build_chip_dominance_data, build_context_data,
-                          build_gpu_map_data, build_capabilities_data)
+                          build_gpu_map_data, build_capabilities_data,
+                          build_trending_data, build_modality_champions)
 
 app = dash.Dash(
     __name__,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
 )
+
+app.index_string = '''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    {%metas%}
+    <title>The AI Race — Live Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏁</text></svg>">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="The AI Race — Who's Actually Winning?">
+    <meta property="og:description" content="Live, data-driven dashboard tracking AI models across benchmarks, pricing, downloads, compute, and capabilities.">
+    <meta property="og:url" content="https://ai-race-dashboard.onrender.com">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="The AI Race — Who's Actually Winning?">
+    <meta name="twitter:description" content="Live dashboard: benchmarks, pricing, downloads, compute trends for top AI models.">
+    <script>if(localStorage.getItem('ai-dash-theme')==='dark')document.documentElement.classList.add('dark');</script>
+    {%css%}
+</head>
+<body>
+    {%app_entry%}
+    <footer>
+        {%config%}
+        {%scripts%}
+        {%renderer%}
+    </footer>
+    <script>
+    (function() {
+        var observer = new MutationObserver(function() {
+            var toggle = document.getElementById('theme-toggle');
+            if (toggle && !toggle._bound) {
+                toggle._bound = true;
+                var icon = document.getElementById('theme-icon');
+                if (document.documentElement.classList.contains('dark') && icon) icon.textContent = '☾';
+                toggle.addEventListener('click', function() {
+                    var isDark = document.documentElement.classList.toggle('dark');
+                    localStorage.setItem('ai-dash-theme', isDark ? 'dark' : 'light');
+                    if (icon) icon.textContent = isDark ? '☾' : '☀';
+                });
+            }
+            var mobileBtn = document.getElementById('mobile-toggle');
+            if (mobileBtn && !mobileBtn._bound) {
+                mobileBtn._bound = true;
+                mobileBtn.addEventListener('click', function() {
+                    document.getElementById('nav-links').classList.toggle('open');
+                    mobileBtn.classList.toggle('active');
+                });
+            }
+            var nav = document.getElementById('main-nav');
+            if (nav && !window._navScrollBound) {
+                window._navScrollBound = true;
+                var hero = document.querySelector('.hero');
+                window.addEventListener('scroll', function() {
+                    if (!hero) return;
+                    nav.classList.toggle('visible', hero.getBoundingClientRect().bottom <= 0);
+                }, {passive: true});
+            }
+            var sections = document.querySelectorAll('[id$="-container"]');
+            var navLinks = document.querySelectorAll('.nav-link');
+            if (sections.length && navLinks.length && !window._ioSetup) {
+                window._ioSetup = true;
+                var io = new IntersectionObserver(function(entries) {
+                    entries.forEach(function(entry) {
+                        if (entry.isIntersecting) {
+                            navLinks.forEach(function(l) { l.classList.remove('active'); });
+                            var t = document.querySelector('.nav-link[href="#' + entry.target.id + '"]');
+                            if (t) t.classList.add('active');
+                        }
+                    });
+                }, {rootMargin: '-30% 0px -60% 0px'});
+                sections.forEach(function(s) { io.observe(s); });
+            }
+            if (navLinks.length && !window._scrollBound) {
+                window._scrollBound = true;
+                navLinks.forEach(function(link) {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        var target = document.getElementById(this.getAttribute('href').slice(1));
+                        if (target) target.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        document.getElementById('nav-links').classList.remove('open');
+                        var mb = document.getElementById('mobile-toggle');
+                        if (mb) mb.classList.remove('active');
+                    });
+                });
+            }
+        });
+        observer.observe(document.body, {childList: true, subtree: true});
+    })();
+    </script>
+</body>
+</html>'''
+
+# ── Master company color palette ──────────────────────────────────
+COMPANY_COLORS = {
+    "OpenAI": "#EEEEEE",
+    "Anthropic": "#E8906A",
+    "Google": "#4285F4",
+    "Meta": "#0099FF",
+    "DeepSeek": "#4D6BFE",
+    "Mistral": "#FF7000",
+    "xAI": "#A8B5C8",
+    "Alibaba": "#7C3AED",
+    "Microsoft": "#00A4EF",
+    "NVIDIA": "#76B900",
+    "Baidu": "#DE0A23",
+    "ByteDance": "#00D4AA",
+    "Moonshot": "#EC4899",
+    "Zhipu AI": "#6366F1",
+    "MiniMax": "#94A3B8",
+    "Other": "#4B5563",
+}
+
+
+def _format_updated(source_label: str, source_key: str) -> str:
+    ts = get_last_fetch_time(source_key)
+    if ts == 0:
+        return f"{source_label}  ·  Fetching..."
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return f"{source_label}  ·  Last refreshed: {dt.strftime('%Y-%m-%d %H:%M')} UTC"
+
+
+def _fmt_number(n):
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.0f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
+
+
 server = app.server
 
 # Loading skeleton
@@ -35,6 +166,57 @@ loading_skeleton = html.Div(
 app.layout = html.Div(
     className="dashboard",
     children=[
+        # ── Navigation ─────────────────────────────────────────
+        html.Nav(
+            id="main-nav",
+            className="site-nav",
+            children=[
+                html.Div(
+                    className="nav-inner",
+                    children=[
+                        html.A(
+                            "fernandogarciag",
+                            href="https://fernandogarciag.com",
+                            className="nav-brand",
+                            target="_blank",
+                        ),
+                        html.Button(
+                            html.Span(className="hamburger-icon"),
+                            id="mobile-toggle",
+                            className="mobile-toggle",
+                            **{"aria-label": "Toggle navigation"},
+                        ),
+                        html.Div(
+                            className="nav-right",
+                            children=[
+                                html.Div(
+                                    className="nav-links",
+                                    id="nav-links",
+                                    children=[
+                                        html.A("Benchmarks", href="#heatmap-container", className="nav-link"),
+                                        html.A("Context", href="#context-container", className="nav-link"),
+                                        html.A("Pricing", href="#pricing-container", className="nav-link"),
+                                        html.A("Timeline", href="#timeline-container", className="nav-link"),
+                                        html.A("Capabilities", href="#capabilities-container", className="nav-link"),
+                                        html.A("Hardware", href="#chips-container", className="nav-link"),
+                                        html.A("Map", href="#gpu-map-container", className="nav-link"),
+                                        html.A("Downloads", href="#downloads-container", className="nav-link"),
+                                        html.A("Trending", href="#trending-container", className="nav-link"),
+                                        html.A("Modality", href="#modality-container", className="nav-link"),
+                                    ],
+                                ),
+                                html.Button(
+                                    html.Span("☀", id="theme-icon"),
+                                    id="theme-toggle",
+                                    className="theme-toggle",
+                                    **{"aria-label": "Toggle dark mode"},
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
         # ── Hero ────────────────────────────────────────────────
         html.Section(
             className="hero",
@@ -347,6 +529,64 @@ app.layout = html.Div(
                     ],
                 ),
 
+                # ── Chart 9: Trending models ─────────────────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "What's trending in AI right now?",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            "Top 15 trending text-generation models on HuggingFace right now, "
+                            "ranked by trending score. Freshness matters — newer models trend higher.",
+                            className="chart-description",
+                        ),
+                        html.P(id="trending-insight", className="chart-insight"),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="trending-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(id="trending-updated", className="last-updated"),
+                    ],
+                ),
+
+                # ── Chart 10: Modality champions ─────────────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "Who leads each AI modality?",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            "The #1 model by downloads for each major AI capability: "
+                            "image generation, voice synthesis, video, music, animation, 3D, and transcription.",
+                            className="chart-description",
+                        ),
+                        html.P(id="modality-insight", className="chart-insight"),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="modality-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(id="modality-updated", className="last-updated"),
+                    ],
+                ),
+
             ],
         ),
         # ── Footer ──────────────────────────────────────────────
@@ -509,7 +749,7 @@ def update_heatmap(_n):
         f"({best_val:.1f}%). No single model dominates every category."
     )
 
-    updated_text = f"Epoch AI  ·  {last_date}"
+    updated_text = _format_updated("Epoch AI", "benchmarks")
 
     kpi_cards = [
         html.Div(className="kpi-card", children=[
@@ -530,17 +770,16 @@ def update_heatmap(_n):
 
 
 # ── Callback 2: Pricing scatter ────────────────────────────────────
-# Org → color mapping (navy palette + distinct accents)
 ORG_COLORS = {
-    "openai": "#E5E7EB",      # light gray
-    "anthropic": "#9CA3AF",   # mid gray
-    "google": "#6B7280",      # gray
-    "meta-llama": "#4B5563",  # dark gray
-    "mistralai": "#D1D5DB",   # silver
-    "deepseek": "#374151",    # charcoal
-    "x-ai": "#F3F4F6",        # off-white
-    "qwen": "#1B2B4B",        # navy
-    "Other": "#1F2937",       # dark slate
+    "openai": COMPANY_COLORS["OpenAI"],
+    "anthropic": COMPANY_COLORS["Anthropic"],
+    "google": COMPANY_COLORS["Google"],
+    "meta-llama": COMPANY_COLORS["Meta"],
+    "mistralai": COMPANY_COLORS["Mistral"],
+    "deepseek": COMPANY_COLORS["DeepSeek"],
+    "x-ai": COMPANY_COLORS["xAI"],
+    "qwen": COMPANY_COLORS["Alibaba"],
+    "Other": COMPANY_COLORS["Other"],
 }
 
 
@@ -665,26 +904,25 @@ def update_pricing(_n):
         f"${cheapest['completion_1m']:.2f} completion per 1M tokens)."
     )
 
-    updated_text = "OpenRouter API  ·  Live"
+    updated_text = _format_updated("OpenRouter API", "openrouter")
 
     return graph, insight, updated_text
 
 
 # ── Callback 3: Downloads by org ───────────────────────────────────
-# Color mapping — reuse org colors where possible, add new ones
 DOWNLOAD_COLORS = {
-    "Qwen (Alibaba)": "#E5E7EB",
-    "Meta": "#9CA3AF",
-    "OpenAI (community)": "#D1D5DB",
-    "OpenAI": "#D1D5DB",
-    "DeepSeek": "#6B7280",
-    "NVIDIA": "#4B5563",
-    "Microsoft": "#374151",
-    "Mistral": "#F3F4F6",
-    "Google": "#6B7280",
-    "Meta (legacy)": "#9CA3AF",
-    "EleutherAI": "#1B2B4B",
-    "HuggingFace": "#4B5563",
+    "Qwen (Alibaba)": COMPANY_COLORS["Alibaba"],
+    "Meta": COMPANY_COLORS["Meta"],
+    "OpenAI (community)": COMPANY_COLORS["OpenAI"],
+    "OpenAI": COMPANY_COLORS["OpenAI"],
+    "DeepSeek": COMPANY_COLORS["DeepSeek"],
+    "NVIDIA": COMPANY_COLORS["NVIDIA"],
+    "Microsoft": COMPANY_COLORS["Microsoft"],
+    "Mistral": COMPANY_COLORS["Mistral"],
+    "Google": COMPANY_COLORS["Google"],
+    "Meta (legacy)": COMPANY_COLORS["Meta"],
+    "EleutherAI": COMPANY_COLORS["Other"],
+    "HuggingFace": COMPANY_COLORS["Other"],
 }
 
 
@@ -713,13 +951,6 @@ def update_downloads(_n):
     df = df.sort_values("downloads", ascending=True)
 
     # Format downloads for display (e.g., 138M, 31M)
-    def fmt(n):
-        if n >= 1_000_000:
-            return f"{n / 1_000_000:.0f}M"
-        if n >= 1_000:
-            return f"{n / 1_000:.0f}K"
-        return str(n)
-
     bar_colors = [DOWNLOAD_COLORS.get(name, "#374151") for name in df["display_name"]]
 
     fig = go.Figure(
@@ -731,7 +962,7 @@ def update_downloads(_n):
                 color=bar_colors,
                 cornerradius=4,
             ),
-            text=[fmt(d) for d in df["downloads"]],
+            text=[_fmt_number(d) for d in df["downloads"]],
             textposition="outside",
             textfont=dict(size=11, color="#D1D5DB", family="IBM Plex Mono, monospace"),
             hovertemplate=(
@@ -771,34 +1002,18 @@ def update_downloads(_n):
     total_downloads = df["downloads"].sum()
 
     insight = (
-        f"{top_org['display_name']} leads with {fmt(top_org['downloads'])} downloads "
+        f"{top_org['display_name']} leads with {_fmt_number(top_org['downloads'])} downloads "
         f"across {top_org['model_count']} models in the top 200. "
-        f"Total across top 12 orgs: {fmt(total_downloads)}."
+        f"Total across top 12 orgs: {_fmt_number(total_downloads)}."
     )
 
-    updated_text = "HuggingFace API  ·  Live"
+    updated_text = _format_updated("HuggingFace API", "hf_downloads")
 
     return graph, insight, updated_text
 
 
 # ── Callback 4: Model release timeline ─────────────────────────────
-TIMELINE_COLORS = {
-    "Google": "#E5E7EB",
-    "OpenAI": "#D1D5DB",
-    "Meta": "#9CA3AF",
-    "Anthropic": "#6B7280",
-    "Alibaba": "#4B5563",
-    "Microsoft": "#F3F4F6",
-    "DeepSeek": "#374151",
-    "xAI": "#D1D5DB",
-    "Baidu": "#1B2B4B",
-    "ByteDance": "#6B7280",
-    "NVIDIA": "#9CA3AF",
-    "Mistral": "#E5E7EB",
-    "Moonshot": "#374151",
-    "Zhipu AI": "#4B5563",
-    "MiniMax": "#1B2B4B",
-}
+TIMELINE_COLORS = {k: v for k, v in COMPANY_COLORS.items() if k != "Other"}
 
 
 @app.callback(
@@ -965,7 +1180,7 @@ def update_timeline(_n):
     else:
         insight = f"{most_active} leads with {most_active_count} notable models since 2020."
 
-    updated_text = "Epoch AI notable models + benchmarks  ·  Updated daily"
+    updated_text = _format_updated("Epoch AI", "notable")
 
     return graph, insight, updated_text
 
@@ -1072,7 +1287,7 @@ def update_capabilities(_n):
     if text_only:
         insight += f" {', '.join(text_only)}: text only — no multimodal capabilities."
 
-    updated_text = "OpenRouter API  ·  Live"
+    updated_text = _format_updated("OpenRouter API", "openrouter")
 
     return graph, insight, updated_text
 
@@ -1176,7 +1391,7 @@ def update_context(_n):
         f"led by {max_m['name']} at {fmt_ctx(max_m['ctx'])}."
     )
 
-    updated_text = "OpenRouter API  ·  Live"
+    updated_text = _format_updated("OpenRouter API", "openrouter")
 
     return graph, insight, updated_text
 
@@ -1280,7 +1495,7 @@ def update_chips(_n):
         f"({stats['us_chips']} chips)."
     )
 
-    updated_text = "Epoch AI ML hardware  ·  Updated daily"
+    updated_text = _format_updated("Epoch AI ML hardware", "ml_hardware")
 
     return graph, insight, updated_text
 
@@ -1446,8 +1661,167 @@ def update_gpu_map(_n):
         f"Biggest investors by H100 equivalents: {', '.join(owner_parts)}."
     )
 
-    updated_text = "Epoch AI GPU clusters  ·  Updated daily"
+    updated_text = _format_updated("Epoch AI GPU clusters", "gpu_clusters")
 
+    return graph, insight, updated_text
+
+
+# ── Callback 9: Trending models ──────────────────────────────────
+HF_ORG_TO_CANONICAL = {
+    "Qwen": "Alibaba", "meta-llama": "Meta", "openai": "OpenAI",
+    "deepseek-ai": "DeepSeek", "google": "Google", "microsoft": "Microsoft",
+    "mistralai": "Mistral", "nvidia": "NVIDIA", "x-ai": "xAI",
+    "ByteDance": "ByteDance", "baidu": "Baidu",
+}
+
+
+@app.callback(
+    Output("trending-container", "children"),
+    Output("trending-insight", "children"),
+    Output("trending-updated", "children"),
+    Input("refresh-5min", "n_intervals"),
+)
+def update_trending(_n):
+    try:
+        raw = get_hf_trending()
+        df = build_trending_data(raw)
+    except Exception as e:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text=f"Could not load trending: {e}",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#EF4444"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+        return graph, "Data unavailable.", ""
+
+    df = df.sort_values("downloads", ascending=True)
+
+    bar_colors = [
+        COMPANY_COLORS.get(HF_ORG_TO_CANONICAL.get(org, ""), COMPANY_COLORS["Other"])
+        for org in df["org"]
+    ]
+
+    fig = go.Figure(data=go.Bar(
+        x=df["downloads"],
+        y=[f"#{r}  {n}" for r, n in zip(df["rank"], df["model_name"])],
+        orientation="h",
+        marker=dict(color=bar_colors, cornerradius=4),
+        text=[_fmt_number(d) for d in df["downloads"]],
+        textposition="outside",
+        textfont=dict(size=10, color="#D1D5DB", family="IBM Plex Mono, monospace"),
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "Org: %{customdata[1]}<br>"
+            "Downloads: %{x:,.0f}<br>"
+            "Likes: %{customdata[2]:,.0f}<br>"
+            "Age: %{customdata[3]} days"
+            "<extra></extra>"
+        ),
+        customdata=list(zip(df["model_name"], df["org"], df["likes"], df["days_ago"])),
+    ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
+        xaxis=dict(visible=False, range=[0, df["downloads"].max() * 1.25], fixedrange=True),
+        yaxis=dict(tickfont=dict(size=10, color="#D1D5DB"), fixedrange=True),
+        dragmode=False,
+        margin=dict(l=180, r=50, t=10, b=10),
+        height=480,
+        autosize=True,
+        bargap=0.2,
+    )
+
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+
+    top = df.iloc[-1]
+    newest = df[df["days_ago"].notna()].nsmallest(1, "days_ago")
+    insight = f"#{int(top['rank'])} {top['model_name']} by {top['org']} leads with {_fmt_number(top['downloads'])} downloads."
+    if not newest.empty:
+        n = newest.iloc[0]
+        insight += f" Freshest: {n['model_name']} ({int(n['days_ago'])} days old)."
+
+    updated_text = _format_updated("HuggingFace Trending", "hf_trending")
+    return graph, insight, updated_text
+
+
+# ── Callback 10: Modality champions ──────────────────────────────
+@app.callback(
+    Output("modality-container", "children"),
+    Output("modality-insight", "children"),
+    Output("modality-updated", "children"),
+    Input("refresh-5min", "n_intervals"),
+)
+def update_modality(_n):
+    try:
+        raw = get_hf_modality_champions()
+        df = build_modality_champions(raw)
+    except Exception as e:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text=f"Could not load modality data: {e}",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#EF4444"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+        return graph, "Data unavailable.", ""
+
+    if df.empty:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text="No modality data available",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#9CA3AF"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+        return graph, "No modality data available.", ""
+
+    df = df.sort_values("downloads", ascending=True)
+
+    fig = go.Figure(data=go.Bar(
+        x=df["downloads"],
+        y=df["label"],
+        orientation="h",
+        marker=dict(color="#6B7280", cornerradius=4),
+        text=[f"{name} ({org})" for name, org in zip(df["model_name"], df["display_org"])],
+        textposition="outside",
+        textfont=dict(size=10, color="#9CA3AF", family="IBM Plex Mono, monospace"),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Model: %{customdata[0]}<br>"
+            "Org: %{customdata[1]}<br>"
+            "Downloads: %{x:,.0f}<br>"
+            "Likes: %{customdata[2]:,.0f}"
+            "<extra></extra>"
+        ),
+        customdata=list(zip(df["model_name"], df["display_org"], df["likes"])),
+    ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
+        xaxis=dict(visible=False, range=[0, df["downloads"].max() * 1.4], fixedrange=True),
+        yaxis=dict(tickfont=dict(size=12, color="#D1D5DB"), fixedrange=True),
+        dragmode=False,
+        margin=dict(l=110, r=160, t=10, b=10),
+        height=320,
+        autosize=True,
+        bargap=0.3,
+    )
+
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+
+    top = df.iloc[-1]
+    insight = (
+        f"Across 7 AI modalities, {top['display_org']}'s {top['model_name']} "
+        f"leads {top['label']} with {_fmt_number(top['downloads'])} downloads."
+    )
+
+    updated_text = _format_updated("HuggingFace Modality", "hf_modality")
     return graph, insight, updated_text
 
 

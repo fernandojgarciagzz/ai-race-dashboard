@@ -52,6 +52,21 @@ HF_DOWNLOADS_URL = "https://huggingface.co/api/models?sort=downloads&direction=-
 HF_TRENDING_URL = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=15&pipeline_tag=text-generation"
 
 
+def get_last_fetch_time(source: str) -> float:
+    """Returns the Unix timestamp of the last successful fetch for a given source."""
+    cache_times = {
+        "benchmarks": _benchmarks_cache_time,
+        "notable": _notable_cache_time,
+        "openrouter": _openrouter_cache_time,
+        "hf_downloads": _hf_downloads_cache_time,
+        "hf_trending": _hf_trending_cache_time,
+        "hf_modality": _hf_modality_cache_time,
+        "gpu_clusters": _gpu_clusters_cache_time,
+        "ml_hardware": _ml_hardware_cache_time,
+    }
+    return cache_times.get(source, 0)
+
+
 def get_benchmarks():
     """
     Returns the Epoch AI benchmarks DataFrame.
