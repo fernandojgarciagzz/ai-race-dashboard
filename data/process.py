@@ -93,22 +93,38 @@ def build_heatmap_data(df):
 
     best_scores = best_scores[best_scores["model_group"].isin(qualified_models)]
 
-    # Step 5: Rank by average score, take top 8
-    avg_score = (
-        best_scores.groupby("model_group")["performance"]
-        .mean()
-        .reset_index(name="avg")
-        .sort_values("avg", ascending=False)
+    # Step 5: Z-score normalize each category before averaging.
+    # Without normalization, categories with larger score ranges would
+    # disproportionately influence the overall ranking.
+    category_stats = (
+        best_scores.groupby("category")["performance"]
+        .agg(["mean", "std"])
+        .reset_index()
     )
-    top_models = avg_score.head(8)["model_group"].tolist()
+    category_stats.columns = ["category", "cat_mean", "cat_std"]
+    best_scores = best_scores.merge(category_stats, on="category")
+    best_scores["z_score"] = best_scores.apply(
+        lambda r: (r["performance"] - r["cat_mean"]) / r["cat_std"]
+        if r["cat_std"] > 0 else 0,
+        axis=1,
+    )
 
-    # Build the final matrix: rows=models (ranked), columns=categories
+    # Rank by average z-score, take top 8
+    avg_z = (
+        best_scores.groupby("model_group")["z_score"]
+        .mean()
+        .reset_index(name="avg_z")
+        .sort_values("avg_z", ascending=False)
+    )
+    top_models = avg_z.head(8)["model_group"].tolist()
+
+    # Build the final matrix using raw performance (display), ranked by z-score
     top_scores = best_scores[best_scores["model_group"].isin(top_models)]
     heatmap_df = top_scores.pivot(
         index="model_group", columns="category", values="performance"
     )
 
-    # Reorder rows by ranking (best average first)
+    # Reorder rows by ranking (best z-score average first)
     heatmap_df = heatmap_df.loc[top_models]
 
     # Reorder columns in our preferred display order
@@ -121,7 +137,11 @@ def build_heatmap_data(df):
     # Get the most recent date in the data for the "last updated" label
     last_date = filtered["date"].max() if "date" in filtered.columns else "Unknown"
 
-    return heatmap_df, last_date
+    # Count how many models were evaluated vs ranked (for insight transparency)
+    total_evaluated = df["model_group"].nunique()
+    num_dropped = total_evaluated - len(top_models)
+
+    return heatmap_df, last_date, total_evaluated, num_dropped
 
 
 # ── Graph 2: Pricing scatter ──────────────────────────────────────
@@ -244,40 +264,59 @@ ORG_DISPLAY_NAMES = {
 
 def build_downloads_data(raw_models, top_n=12):
     """
-    Aggregates HuggingFace model downloads by organization.
+    Aggregates HuggingFace model downloads by organization with recency weighting.
+
+    The chart asks "who's winning NOW" so we apply exponential decay based on
+    model creation date — a model created 60 days ago contributes half the weight
+    of one created today. This prevents 2-year-old models from dominating.
 
     Steps:
     1. Extract org from model id (e.g., "Qwen/Qwen3-8B" → "Qwen").
-    2. Sum downloads per org.
-    3. Take top N orgs by total downloads.
-    4. Apply friendly display names.
+    2. Apply time-decay weight to each model's downloads.
+    3. Sum weighted downloads per org.
+    4. Take top N orgs by weighted total.
+    5. Apply friendly display names.
 
     Returns:
         pd.DataFrame with columns: org, display_name, downloads, model_count
         Sorted descending by downloads.
     """
     from collections import defaultdict
+    from datetime import datetime
+    import math
 
-    org_downloads = defaultdict(int)
+    now = datetime.utcnow()
+    HALF_LIFE_DAYS = 60
+
+    org_downloads = defaultdict(float)
     org_count = defaultdict(int)
 
     for m in raw_models:
         model_id = m.get("id", "")
         org = model_id.split("/")[0] if "/" in model_id else "community"
 
-        # Skip test/internal repos
         if org in ("trl-internal-testing", "dphn", "hmellor", "community"):
             continue
 
-        org_downloads[org] += m.get("downloads", 0)
+        downloads = m.get("downloads", 0)
+
+        # Compute time-decay weight from creation date
+        created_str = (m.get("createdAt") or "")[:10]
+        try:
+            created_dt = datetime.strptime(created_str, "%Y-%m-%d")
+            days_old = max((now - created_dt).days, 0)
+        except (ValueError, TypeError):
+            days_old = 365  # assume old if no date
+
+        weight = math.exp(-0.693 * days_old / HALF_LIFE_DAYS)
+        org_downloads[org] += downloads * weight
         org_count[org] += 1
 
-    # Build DataFrame, sort, take top N
     rows = [
         {
             "org": org,
             "display_name": ORG_DISPLAY_NAMES.get(org, org),
-            "downloads": downloads,
+            "downloads": int(downloads),
             "model_count": org_count[org],
         }
         for org, downloads in org_downloads.items()
@@ -769,24 +808,38 @@ def build_capabilities_data(raw_models, top_n=10):
     """
     Parses OpenRouter model architectures to build a capabilities matrix.
 
-    How architecture parsing works:
-    - Each model has architecture.input_modalities (array of strings like
-      ["text", "image", "audio", "video", "file"])
-    - And architecture.output_modalities (array like ["text", "image", "audio"])
-    - We check membership in these arrays to determine capabilities.
+    Deduplicates by model family before counting — so gpt-4o-2024-11-20 and
+    gpt-4o-2024-08-06 count as one model, not two.
 
     Steps:
-    1. For each model, extract org and check input/output modalities.
-    2. Aggregate: count how many models per org have each capability.
-    3. Take top N orgs by total model count.
-    4. Return as a DataFrame (rows=orgs, columns=capabilities).
+    1. Deduplicate by family (strip date suffixes), keeping the most capable version.
+    2. For each unique family, extract org and check input/output modalities.
+    3. Aggregate: count how many families per org have each capability.
+    4. Take top N orgs by family count.
+    5. Return as a DataFrame (rows=orgs, columns=capabilities).
     """
     from collections import defaultdict
+
+    # Deduplicate: keep the version with the most modalities per family
+    seen_families = {}
+    for m in raw_models:
+        family = _extract_family(m["id"])
+        arch = m.get("architecture", {}) or {}
+        inputs = arch.get("input_modalities", []) or []
+        outputs = arch.get("output_modalities", []) or []
+        modality_count = len(inputs) + len(outputs)
+
+        if family not in seen_families or modality_count > seen_families[family]["_mod_count"]:
+            seen_families[family] = {
+                "id": m["id"],
+                "architecture": arch,
+                "_mod_count": modality_count,
+            }
 
     org_caps = defaultdict(lambda: defaultdict(int))
     org_total = defaultdict(int)
 
-    for m in raw_models:
+    for family, m in seen_families.items():
         org = m["id"].split("/")[0]
         arch = m.get("architecture", {}) or {}
         inputs = arch.get("input_modalities", []) or []
@@ -807,7 +860,7 @@ def build_capabilities_data(raw_models, top_n=10):
         if "audio" in outputs:
             org_caps[org]["Audio gen"] += 1
 
-    # Top N orgs by total model count
+    # Top N orgs by unique family count
     top_orgs = sorted(org_total.items(), key=lambda x: -x[1])[:top_n]
 
     rows = []
@@ -859,3 +912,106 @@ def build_modality_champions(raw_results):
         })
 
     return pd.DataFrame(rows)
+
+
+# ── Graph 11: SWE-bench leaderboard ─────────────────────────────────
+
+SWEBENCH_ORG_PATTERNS = [
+    (["Claude", "Anthropic"], "Anthropic"),
+    (["GPT", "OpenAI", "o1", "o3", "o4"], "OpenAI"),
+    (["Gemini", "Google"], "Google"),
+    (["DeepSeek"], "DeepSeek"),
+    (["Qwen", "Alibaba"], "Alibaba"),
+    (["Llama", "Meta"], "Meta"),
+    (["Mistral", "Codestral"], "Mistral"),
+    (["MiniMax"], "MiniMax"),
+    (["Grok", "xAI"], "xAI"),
+]
+
+
+def _infer_swebench_org(name):
+    for patterns, org in SWEBENCH_ORG_PATTERNS:
+        for p in patterns:
+            if p.lower() in name.lower():
+                return org
+    return "Other"
+
+
+def build_swebench_data(raw_results, top_n=15):
+    """
+    Transforms SWE-bench leaderboard results into a DataFrame for a bar chart.
+
+    Steps:
+    1. Take top N entries by resolved %.
+    2. Infer organization from model name.
+    3. Flag open-source models.
+
+    Returns:
+        pd.DataFrame with columns: name, resolved, org, date, is_open
+    """
+    sorted_results = sorted(raw_results, key=lambda x: x.get("resolved", 0), reverse=True)
+    top = sorted_results[:top_n]
+
+    rows = []
+    for r in top:
+        rows.append({
+            "name": r.get("name", "Unknown"),
+            "resolved": r.get("resolved", 0),
+            "org": _infer_swebench_org(r.get("name", "")),
+            "date": r.get("date", ""),
+            "is_open": r.get("os_model", False) or r.get("os_system", False),
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ── Graph 12: PyPI SDK downloads ─────────────────────────────────────
+
+PYPI_DISPLAY_NAMES = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "transformers": "HuggingFace (transformers)",
+    "google-generativeai": "Google Gemini",
+    "langchain": "LangChain",
+    "together": "Together AI",
+    "mistralai": "Mistral",
+    "cohere": "Cohere",
+    "replicate": "Replicate",
+}
+
+PYPI_COMPANY_MAP = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "transformers": "Other",
+    "google-generativeai": "Google",
+    "langchain": "Other",
+    "together": "Other",
+    "mistralai": "Mistral",
+    "cohere": "Other",
+    "replicate": "Other",
+}
+
+
+def build_pypi_data(raw_results):
+    """
+    Transforms PyPI download data into a DataFrame for a bar chart.
+
+    Returns:
+        pd.DataFrame with columns: package, display_name, last_week,
+        last_month, company
+        Sorted descending by last_week.
+    """
+    rows = []
+    for r in raw_results:
+        pkg = r["package"]
+        rows.append({
+            "package": pkg,
+            "display_name": PYPI_DISPLAY_NAMES.get(pkg, pkg),
+            "last_week": r.get("last_week", 0),
+            "last_month": r.get("last_month", 0),
+            "company": PYPI_COMPANY_MAP.get(pkg, "Other"),
+        })
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values("last_week", ascending=False).reset_index(drop=True)
+    return df

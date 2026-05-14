@@ -15,12 +15,14 @@ from datetime import datetime, timezone
 from data.fetch import (get_benchmarks, get_openrouter_models, get_hf_top_models,
                         get_notable_models, get_benchmarks_models, get_gpu_clusters,
                         get_ml_hardware, get_last_fetch_time,
-                        get_hf_trending, get_hf_modality_champions)
+                        get_hf_trending, get_hf_modality_champions,
+                        get_swebench_leaderboard)
 from data.process import (build_heatmap_data, build_pricing_data, build_downloads_data,
                           build_timeline_data, filter_flagship_models,
                           build_chip_dominance_data, build_context_data,
-                          build_gpu_map_data, build_capabilities_data,
-                          build_trending_data, build_modality_champions)
+                          build_gpu_map_data,
+                          build_trending_data, build_modality_champions,
+                          build_swebench_data)
 
 app = dash.Dash(
     __name__,
@@ -196,13 +198,13 @@ app.layout = html.Div(
                                         html.A("Benchmarks", href="#heatmap-container", className="nav-link"),
                                         html.A("Context", href="#context-container", className="nav-link"),
                                         html.A("Pricing", href="#pricing-container", className="nav-link"),
-                                        html.A("Timeline", href="#timeline-container", className="nav-link"),
-                                        html.A("Capabilities", href="#capabilities-container", className="nav-link"),
+                                        html.A("Scaling", href="#timeline-container", className="nav-link"),
                                         html.A("Hardware", href="#chips-container", className="nav-link"),
                                         html.A("Map", href="#gpu-map-container", className="nav-link"),
                                         html.A("Downloads", href="#downloads-container", className="nav-link"),
                                         html.A("Trending", href="#trending-container", className="nav-link"),
                                         html.A("Modality", href="#modality-container", className="nav-link"),
+                                        html.A("SWE-bench", href="#swebench-container", className="nav-link"),
                                     ],
                                 ),
                                 html.Button(
@@ -260,8 +262,10 @@ app.layout = html.Div(
                             className="chart-title",
                         ),
                         html.P(
-                            "Top 8 models ranked by average score across 5 categories. "
-                            "Each cell shows a percentage — ★ marks the best in each column.",
+                            "Top 8 models ranked by average score across 5 specific benchmarks "
+                            "(MATH level 5, WeirdML, ARC-AGI-2, GPQA, SimpleBench). "
+                            "Each cell shows a percentage — ★ marks the best in each column. "
+                            "These reflect narrow benchmark performance, not overall capability.",
                             className="chart-description",
                         ),
                         html.P(id="chart-insight", className="chart-insight"),
@@ -291,7 +295,7 @@ app.layout = html.Div(
                         ),
                         html.P(
                             "Context window = how much text a model can process at once. "
-                            "Longer bars mean more models in that range. "
+                            "For reference: 8K tokens ≈ 12 pages, 128K ≈ a full novel, 1M ≈ 10 novels. "
                             "Hover for examples. Advertised maximums — effective context may vary.",
                             className="chart-description",
                         ),
@@ -357,12 +361,12 @@ app.layout = html.Div(
                     style={"marginTop": "2rem"},
                     children=[
                         html.H2(
-                            "Who's investing most in winning this race?",
+                            "How fast is AI scaling?",
                             className="chart-title",
                         ),
                         html.P(
-                            "Every notable AI model since 2020, plotted by date and training compute (FLOP). "
-                            "Bigger dots = more parameters. "
+                            "Every notable AI model since 2020, plotted by release date and training compute (FLOP). "
+                            "Higher = more compute spent training. Bigger dots = more parameters. "
                             "◆ diamonds = recent models whose compute hasn't been published yet.",
                             className="chart-description",
                         ),
@@ -382,41 +386,6 @@ app.layout = html.Div(
                         ),
                         html.P(
                             id="timeline-updated",
-                            className="last-updated",
-                        ),
-                    ],
-                ),
-
-                # ── Chart 5: Capabilities heatmap ───────────────
-                html.Div(
-                    className="chart-section",
-                    style={"marginTop": "2rem"},
-                    children=[
-                        html.H2(
-                            "What can each company's AI actually do?",
-                            className="chart-title",
-                        ),
-                        html.P(
-                            "Each cell shows how many models from that company support a given modality. "
-                            "Brighter = more models. Zero means no support at all.",
-                            className="chart-description",
-                        ),
-                        html.P(
-                            id="capabilities-insight",
-                            className="chart-insight",
-                        ),
-                        dcc.Loading(
-                            type="default",
-                            color="#9CA3AF",
-                            children=[
-                                html.Div(
-                                    id="capabilities-container",
-                                    children=[loading_skeleton],
-                                )
-                            ],
-                        ),
-                        html.P(
-                            id="capabilities-updated",
                             className="last-updated",
                         ),
                     ],
@@ -494,7 +463,38 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # ── Chart 8: Downloads by org ─────────────────────
+                # ── Chart 8: SWE-bench leaderboard ────────────────
+                html.Div(
+                    className="chart-section",
+                    style={"marginTop": "2rem"},
+                    children=[
+                        html.H2(
+                            "Which AI can actually code?",
+                            className="chart-title",
+                        ),
+                        html.P(
+                            "SWE-bench measures real-world software engineering: given a GitHub issue, "
+                            "can the AI generate a correct patch? Higher % = more issues resolved. "
+                            "Results depend on submissions — newer models may not yet be evaluated.",
+                            className="chart-description",
+                        ),
+                        html.P(id="swebench-insight", className="chart-insight"),
+                        dcc.Loading(
+                            type="default",
+                            color="#9CA3AF",
+                            children=[
+                                html.Div(
+                                    id="swebench-container",
+                                    children=[loading_skeleton],
+                                )
+                            ],
+                        ),
+                        html.P(id="swebench-updated", className="last-updated"),
+                    ],
+                ),
+
+                # ── Open Source section ────────────────────────────
+                # ── Downloads by org ─────────────────────────────
                 html.Div(
                     className="chart-section",
                     style={"marginTop": "2rem"},
@@ -504,8 +504,8 @@ app.layout = html.Div(
                             className="chart-title",
                         ),
                         html.P(
-                            "Total downloads across HuggingFace's top 200 text-generation models, "
-                            "grouped by organization. Longer bars = more downloads.",
+                            "Downloads across HuggingFace's top 200 text-generation models, "
+                            "weighted by recency (60-day half-life). Measures current momentum, not historical totals.",
                             className="chart-description",
                         ),
                         html.P(
@@ -529,17 +529,17 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # ── Chart 9: Trending models ─────────────────────
+                # ── Trending models ─────────────────────────────
                 html.Div(
                     className="chart-section",
                     style={"marginTop": "2rem"},
                     children=[
                         html.H2(
-                            "What's trending in AI right now?",
+                            "What's trending in open-source AI?",
                             className="chart-title",
                         ),
                         html.P(
-                            "Top 15 trending text-generation models on HuggingFace right now, "
+                            "Top 15 trending open-source models on HuggingFace right now, "
                             "ranked by trending score. Freshness matters — newer models trend higher.",
                             className="chart-description",
                         ),
@@ -558,17 +558,17 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # ── Chart 10: Modality champions ─────────────────
+                # ── Modality champions ─────────────────────────────
                 html.Div(
                     className="chart-section",
                     style={"marginTop": "2rem"},
                     children=[
                         html.H2(
-                            "Who leads each AI modality?",
+                            "Who leads each open-source AI modality?",
                             className="chart-title",
                         ),
                         html.P(
-                            "The #1 model by downloads for each major AI capability: "
+                            "The #1 open-source model by downloads for each major AI capability: "
                             "image generation, voice synthesis, video, music, animation, 3D, and transcription.",
                             className="chart-description",
                         ),
@@ -604,6 +604,9 @@ app.layout = html.Div(
                         "  ·  ",
                         html.A("HuggingFace", href="https://huggingface.co",
                                target="_blank"),
+                        "  ·  ",
+                        html.A("SWE-bench", href="https://www.swebench.com",
+                               target="_blank"),
                         "  ·  Built with Plotly Dash",
                     ]
                 ),
@@ -627,7 +630,7 @@ app.layout = html.Div(
 def update_heatmap(_n):
     try:
         raw_df = get_benchmarks()
-        heatmap_df, last_date = build_heatmap_data(raw_df)
+        heatmap_df, last_date, total_evaluated, num_dropped = build_heatmap_data(raw_df)
     except Exception as e:
         empty_fig = go.Figure()
         empty_fig.update_layout(
@@ -746,7 +749,9 @@ def update_heatmap(_n):
     best_val = top_scores.max()
     insight = (
         f"{top_model} leads overall, scoring highest in {best_cat} "
-        f"({best_val:.1f}%). No single model dominates every category."
+        f"({best_val:.1f}%). "
+        f"{len(models)} models ranked from {total_evaluated} evaluated "
+        f"({num_dropped} had insufficient data)."
     )
 
     updated_text = _format_updated("Epoch AI", "benchmarks")
@@ -1185,113 +1190,6 @@ def update_timeline(_n):
     return graph, insight, updated_text
 
 
-# ── Callback 5: Capabilities heatmap ───────────────────────────────
-@app.callback(
-    Output("capabilities-container", "children"),
-    Output("capabilities-insight", "children"),
-    Output("capabilities-updated", "children"),
-    Input("refresh-5min", "n_intervals"),
-)
-def update_capabilities(_n):
-    try:
-        raw = get_openrouter_models()
-        df = build_capabilities_data(raw, top_n=10)
-    except Exception as e:
-        empty_fig = go.Figure()
-        empty_fig.update_layout(
-            annotations=[dict(text=f"Could not load capabilities: {e}",
-                              xref="paper", yref="paper", x=0.5, y=0.5,
-                              showarrow=False, font=dict(size=14, color="#EF4444"))],
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        )
-        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
-        return graph, "Data unavailable.", ""
-
-    from data.process import CAPABILITY_COLUMNS
-
-    orgs = df["display_name"].tolist()
-    caps = CAPABILITY_COLUMNS
-    z = df[caps].values
-
-    # Dynamic text color: dark on bright cells, light on dark cells
-    z_max = z.max() if z.max() > 0 else 1
-
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=z,
-            x=caps,
-            y=orgs,
-            colorscale=[
-                [0.0, "#111318"],
-                [0.01, "#1B2B4B"],
-                [0.2, "#374151"],
-                [0.45, "#6B7280"],
-                [0.7, "#D1D5DB"],
-                [1.0, "#F3F4F6"],
-            ],
-            showscale=False,
-            xgap=3,
-            ygap=3,
-        )
-    )
-
-    # Annotations with dynamic text color
-    annotations = []
-    for i, org in enumerate(orgs):
-        for j, cap in enumerate(caps):
-            val = int(z[i][j])
-            norm = val / z_max if z_max > 0 else 0
-            text_color = "#111318" if norm > 0.5 else "#F3F4F6"
-            if val == 0:
-                text_color = "#374151"
-            annotations.append(dict(
-                x=cap, y=org, text=str(val),
-                showarrow=False,
-                font=dict(size=12, color=text_color, family="IBM Plex Mono, monospace"),
-            ))
-
-    fig.update_layout(
-        annotations=annotations,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
-        yaxis=dict(
-            tickfont=dict(size=12, color="#D1D5DB"),
-            side="left",
-            autorange="reversed",
-            fixedrange=True,
-        ),
-        xaxis=dict(
-            tickfont=dict(size=11, color="#9CA3AF"),
-            side="top",
-            fixedrange=True,
-        ),
-        dragmode=False,
-        margin=dict(l=90, r=15, t=35, b=15),
-        height=400,
-        autosize=True,
-    )
-
-    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
-
-    # Insight: find most versatile org (most non-zero capabilities)
-    df["num_caps"] = (df[caps] > 0).sum(axis=1)
-    most_versatile = df.loc[df["num_caps"].idxmax()]
-    text_only = df[df["num_caps"] == 0]["display_name"].tolist()
-
-    insight = (
-        f"{most_versatile['display_name']} is the most versatile with "
-        f"{int(most_versatile['num_caps'])} capability types across "
-        f"{most_versatile['total_models']} models."
-    )
-    if text_only:
-        insight += f" {', '.join(text_only)}: text only — no multimodal capabilities."
-
-    updated_text = _format_updated("OpenRouter API", "openrouter")
-
-    return graph, insight, updated_text
-
-
 # ── Callback 6: Context window distribution ───────────────────────
 
 CONTEXT_BUCKET_COLORS = {
@@ -1508,6 +1406,13 @@ GPU_REGION_COLORS = {
     "Other": "#6B7280",          # gray
 }
 
+GPU_REGION_SYMBOLS = {
+    "China": "diamond",
+    "United States": "circle",
+    "Europe": "triangle-up",
+    "Other": "square",
+}
+
 
 @app.callback(
     Output("gpu-map-container", "children"),
@@ -1532,57 +1437,94 @@ def update_gpu_map(_n):
 
     fig = go.Figure()
 
+    def fmt_power(mw):
+        if pd.notna(mw):
+            return f"{mw:,.0f} MW"
+        return "Unknown"
+
+    def fmt_h100(h):
+        if h >= 1_000_000:
+            return f"{h / 1_000_000:,.1f}M"
+        if h >= 1_000:
+            return f"{h / 1_000:,.0f}K"
+        return f"{h:,.0f}"
+
     # One trace per region for legend + color
+    # Anonymized clusters get a distinct hollow diamond marker
     for region, color in GPU_REGION_COLORS.items():
-        subset = map_df[map_df["region"] == region]
-        if subset.empty:
-            continue
+        subset = map_df[(map_df["region"] == region) & (~map_df["anonymized"])]
+        if not subset.empty:
+            fig.add_trace(go.Scattergeo(
+                lat=subset["lat"],
+                lon=subset["lon"],
+                mode="markers",
+                name=f"{region} ({len(subset)})",
+                marker=dict(
+                    color=color,
+                    size=subset["dot_size"],
+                    opacity=0.7,
+                    symbol=GPU_REGION_SYMBOLS.get(region, "circle"),
+                    line=dict(width=0.5, color="rgba(255,255,255,0.3)"),
+                    sizemode="diameter",
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Owner: %{customdata[1]}<br>"
+                    "Country: %{customdata[2]}<br>"
+                    "Chip: %{customdata[3]}<br>"
+                    "H100 equiv: %{customdata[4]}<br>"
+                    "Power: %{customdata[5]}<br>"
+                    "Status: %{customdata[6]}"
+                    "<extra></extra>"
+                ),
+                customdata=list(zip(
+                    subset["name"],
+                    subset["owner"],
+                    subset["country"],
+                    subset["chip_type"],
+                    [fmt_h100(h) for h in subset["h100_equiv"]],
+                    [fmt_power(mw) for mw in subset["power_mw"]],
+                    subset["status"],
+                )),
+            ))
 
-        # Format power for hover
-        def fmt_power(mw):
-            if pd.notna(mw):
-                return f"{mw:,.0f} MW"
-            return "Unknown"
-
-        def fmt_h100(h):
-            if h >= 1_000_000:
-                return f"{h / 1_000_000:,.1f}M"
-            if h >= 1_000:
-                return f"{h / 1_000:,.0f}K"
-            return f"{h:,.0f}"
-
-        fig.add_trace(go.Scattergeo(
-            lat=subset["lat"],
-            lon=subset["lon"],
-            mode="markers",
-            name=f"{region} ({len(subset)})",
-            marker=dict(
-                color=color,
-                size=subset["dot_size"],
-                opacity=0.7,
-                line=dict(width=0.5, color="rgba(255,255,255,0.3)"),
-                sizemode="diameter",
-            ),
-            hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                "Owner: %{customdata[1]}<br>"
-                "Country: %{customdata[2]}<br>"
-                "Chip: %{customdata[3]}<br>"
-                "H100 equiv: %{customdata[4]}<br>"
-                "Power: %{customdata[5]}<br>"
-                "Status: %{customdata[6]}"
-                "<extra></extra>"
-            ),
-            customdata=list(zip(
-                subset["name"],
-                subset["owner"],
-                subset["country"],
-                subset["chip_type"],
-                [fmt_h100(h) for h in subset["h100_equiv"]],
-                [fmt_power(mw) for mw in subset["power_mw"]],
-                subset["status"],
-            )),
-        ))
+        # Anonymized clusters — hollow markers with lower opacity
+        anon_subset = map_df[(map_df["region"] == region) & (map_df["anonymized"])]
+        if not anon_subset.empty:
+            fig.add_trace(go.Scattergeo(
+                lat=anon_subset["lat"],
+                lon=anon_subset["lon"],
+                mode="markers",
+                name=f"{region} — approx. ({len(anon_subset)})",
+                marker=dict(
+                    color="rgba(0,0,0,0)",
+                    size=anon_subset["dot_size"],
+                    opacity=0.5,
+                    symbol="diamond",
+                    line=dict(width=1.5, color=color),
+                    sizemode="diameter",
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Owner: %{customdata[1]}<br>"
+                    "Country: %{customdata[2]}<br>"
+                    "Chip: %{customdata[3]}<br>"
+                    "H100 equiv: %{customdata[4]}<br>"
+                    "Power: %{customdata[5]}<br>"
+                    "Status: %{customdata[6]}<br>"
+                    "<i>Location approximate</i>"
+                    "<extra></extra>"
+                ),
+                customdata=list(zip(
+                    anon_subset["name"],
+                    anon_subset["owner"],
+                    anon_subset["country"],
+                    anon_subset["chip_type"],
+                    [fmt_h100(h) for h in anon_subset["h100_equiv"]],
+                    [fmt_power(mw) for mw in anon_subset["power_mw"]],
+                    anon_subset["status"],
+                )),
+            ))
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1822,6 +1764,89 @@ def update_modality(_n):
     )
 
     updated_text = _format_updated("HuggingFace Modality", "hf_modality")
+    return graph, insight, updated_text
+
+
+# ── Callback 11: SWE-bench leaderboard ──────────────────────────────
+@app.callback(
+    Output("swebench-container", "children"),
+    Output("swebench-insight", "children"),
+    Output("swebench-updated", "children"),
+    Input("refresh-24h", "n_intervals"),
+)
+def update_swebench(_n):
+    try:
+        raw = get_swebench_leaderboard()
+        df = build_swebench_data(raw, top_n=15)
+    except Exception as e:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            annotations=[dict(text=f"Could not load SWE-bench: {e}",
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              showarrow=False, font=dict(size=14, color="#EF4444"))],
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        )
+        graph = dcc.Graph(figure=empty_fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+        return graph, "Data unavailable.", ""
+
+    df = df.sort_values("resolved", ascending=True)
+
+    bar_colors = [
+        COMPANY_COLORS.get(org, COMPANY_COLORS["Other"]) for org in df["org"]
+    ]
+
+    fig = go.Figure(data=go.Bar(
+        x=df["resolved"],
+        y=df["name"],
+        orientation="h",
+        marker=dict(color=bar_colors, cornerradius=4),
+        text=[f"{v:.1f}%" for v in df["resolved"]],
+        textposition="outside",
+        textfont=dict(size=10, color="#D1D5DB", family="IBM Plex Mono, monospace"),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Resolved: %{x:.1f}%<br>"
+            "Org: %{customdata[0]}<br>"
+            "Date: %{customdata[1]}<br>"
+            "Open source: %{customdata[2]}"
+            "<extra></extra>"
+        ),
+        customdata=list(zip(
+            df["org"],
+            df["date"],
+            ["Yes" if o else "No" for o in df["is_open"]],
+        )),
+    ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#D1D5DB", family="Outfit, system-ui, sans-serif"),
+        xaxis=dict(
+            title=dict(text="Issues resolved (%)", font=dict(size=11, color="#9CA3AF")),
+            tickfont=dict(size=10, color="#6B7280"),
+            range=[0, min(df["resolved"].max() * 1.15, 100)],
+            fixedrange=True,
+            gridcolor="rgba(255,255,255,0.06)",
+        ),
+        yaxis=dict(tickfont=dict(size=10, color="#D1D5DB"), fixedrange=True),
+        dragmode=False,
+        margin=dict(l=240, r=50, t=10, b=35),
+        height=480,
+        autosize=True,
+        bargap=0.2,
+    )
+
+    graph = dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True, "scrollZoom": False})
+
+    # Insight
+    top = df.iloc[-1]
+    open_count = df["is_open"].sum()
+    insight = (
+        f"{top['name']} leads at {top['resolved']:.1f}% of real GitHub issues resolved. "
+        f"{open_count} of the top {len(df)} systems use open-source components."
+    )
+
+    updated_text = _format_updated("SWE-bench", "swebench")
     return graph, insight, updated_text
 
 

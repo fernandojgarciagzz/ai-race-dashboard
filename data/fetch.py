@@ -40,7 +40,17 @@ _gpu_clusters_cache_time = 0
 _ml_hardware_cache = None
 _ml_hardware_cache_time = 0
 
+_swebench_cache = None
+_swebench_cache_time = 0
+
+_pypi_cache = None
+_pypi_cache_time = 0
+
+_lmarena_cache = None
+_lmarena_cache_time = 0
+
 CACHE_24H = 86400
+CACHE_6H = 21600
 CACHE_5MIN = 300
 
 BENCHMARKS_URL = "https://epoch.ai/data/eci_benchmarks.csv"
@@ -50,6 +60,10 @@ ML_HARDWARE_URL = "https://epoch.ai/data/ml_hardware.csv"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 HF_DOWNLOADS_URL = "https://huggingface.co/api/models?sort=downloads&direction=-1&limit=200&pipeline_tag=text-generation"
 HF_TRENDING_URL = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=15&pipeline_tag=text-generation"
+SWEBENCH_URL = "https://www.swebench.com/"
+LMARENA_LEADERBOARD_URL = "https://huggingface.co/spaces/lmarena-ai/arena-leaderboard/tree/main"
+PYPI_PACKAGES = ["openai", "anthropic", "transformers", "google-generativeai",
+                 "langchain", "together", "mistralai", "cohere", "replicate"]
 
 
 def get_last_fetch_time(source: str) -> float:
@@ -63,6 +77,9 @@ def get_last_fetch_time(source: str) -> float:
         "hf_modality": _hf_modality_cache_time,
         "gpu_clusters": _gpu_clusters_cache_time,
         "ml_hardware": _ml_hardware_cache_time,
+        "swebench": _swebench_cache_time,
+        "pypi": _pypi_cache_time,
+        "lmarena": _lmarena_cache_time,
     }
     return cache_times.get(source, 0)
 
@@ -383,3 +400,152 @@ def get_hf_modality_champions():
     _hf_modality_cache = results
     _hf_modality_cache_time = now
     return results
+
+
+def get_swebench_leaderboard():
+    """
+    Fetches SWE-bench leaderboard from swebench.com.
+
+    Parses the embedded JSON from the HTML page. Uses the "bash-only" category
+    (most submissions, most comparable). Cached for 6 hours.
+
+    Returns:
+        List of dicts with: name, resolved (%), date, cost, os_model, os_system
+    """
+    global _swebench_cache, _swebench_cache_time
+    import re
+    import json
+
+    now = time.time()
+    if _swebench_cache is not None and (now - _swebench_cache_time) < CACHE_6H:
+        return _swebench_cache
+
+    try:
+        response = requests.get(SWEBENCH_URL, timeout=15)
+        response.raise_for_status()
+
+        match = re.search(
+            r'id="leaderboard-data"[^>]*>\s*(.*?)\s*</script>',
+            response.text, re.DOTALL
+        )
+        if not match:
+            raise ValueError("Could not find leaderboard-data in SWE-bench page")
+
+        data = json.loads(match.group(1))
+        # Use "bash-only" category — it has the most submissions
+        bash_cat = next((d for d in data if d["name"] == "bash-only"), None)
+        if not bash_cat:
+            bash_cat = data[0]
+
+        results = bash_cat["results"]
+        _swebench_cache = results
+        _swebench_cache_time = now
+        return results
+
+    except Exception as e:
+        if _swebench_cache is not None:
+            print(f"Warning: Failed to refresh SWE-bench ({e}). Using stale cache.")
+            return _swebench_cache
+        raise RuntimeError(
+            f"Could not fetch SWE-bench data and no cache available: {e}"
+        )
+
+
+def get_pypi_downloads():
+    """
+    Fetches recent download counts for major AI SDK packages from PyPI Stats.
+
+    Makes one request per package with 1.5s delay between to avoid rate limiting.
+    Cached for 24 hours (download patterns don't change faster than that).
+
+    Returns:
+        List of dicts with: package, last_day, last_week, last_month
+    """
+    global _pypi_cache, _pypi_cache_time
+
+    now = time.time()
+    if _pypi_cache is not None and (now - _pypi_cache_time) < CACHE_24H:
+        return _pypi_cache
+
+    results = []
+    for pkg in PYPI_PACKAGES:
+        try:
+            url = f"https://pypistats.org/api/packages/{pkg}/recent"
+            resp = requests.get(url, timeout=10, headers={"User-Agent": "ai-race-dashboard/1.0"})
+            if resp.status_code == 429:
+                print(f"Warning: PyPI rate limited at '{pkg}', stopping batch.")
+                break
+            resp.raise_for_status()
+            data = resp.json()["data"]
+            results.append({
+                "package": pkg,
+                "last_day": data.get("last_day", 0),
+                "last_week": data.get("last_week", 0),
+                "last_month": data.get("last_month", 0),
+            })
+        except Exception as e:
+            print(f"Warning: Failed to fetch PyPI stats for '{pkg}': {e}")
+        time.sleep(3)
+
+    if results:
+        _pypi_cache = results
+        _pypi_cache_time = now
+        return results
+
+    if _pypi_cache is not None:
+        print("Warning: All PyPI requests failed. Using stale cache.")
+        return _pypi_cache
+    raise RuntimeError("Could not fetch PyPI data and no cache available")
+
+
+def get_lmarena_leaderboard():
+    """
+    Fetches the latest LMArena (Chatbot Arena) leaderboard CSV from HuggingFace.
+
+    Discovers the most recent leaderboard_table_YYYYMMDD.csv file from the
+    space repository, then downloads and parses it. Cached for 6 hours.
+
+    Returns:
+        pd.DataFrame with columns from the CSV (Model, Arena Score, Organization, etc.)
+    """
+    global _lmarena_cache, _lmarena_cache_time
+
+    now = time.time()
+    if _lmarena_cache is not None and (now - _lmarena_cache_time) < CACHE_6H:
+        return _lmarena_cache
+
+    try:
+        # List files to find the latest leaderboard CSV
+        resp = requests.get(LMARENA_LEADERBOARD_URL, timeout=15)
+        resp.raise_for_status()
+        files = resp.json()
+
+        # Find the most recent leaderboard_table file
+        import re
+        csv_files = [
+            f["path"] for f in files
+            if re.match(r'leaderboard_table_\d{8}\.csv', f["path"])
+        ]
+        if not csv_files:
+            raise ValueError("No leaderboard CSV files found in space")
+
+        latest_csv = sorted(csv_files)[-1]
+
+        # Download the CSV
+        csv_url = f"https://huggingface.co/spaces/lmarena-ai/arena-leaderboard/resolve/main/{latest_csv}"
+        csv_resp = requests.get(csv_url, timeout=15)
+        csv_resp.raise_for_status()
+
+        import io
+        df = pd.read_csv(io.StringIO(csv_resp.text))
+        _lmarena_cache = df
+        _lmarena_cache_time = now
+        return df
+
+    except Exception as e:
+        if _lmarena_cache is not None:
+            print(f"Warning: Failed to refresh LMArena ({e}). Using stale cache.")
+            return _lmarena_cache
+        raise RuntimeError(
+            f"Could not fetch LMArena data and no cache available: {e}"
+        )
