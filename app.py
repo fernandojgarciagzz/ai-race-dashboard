@@ -174,6 +174,13 @@ loading_skeleton = html.Div(
 app.layout = html.Div(
     className="dashboard",
     children=[
+        # ── Floating portfolio link ───────────────────────────
+        html.A(
+            "← fernandogarciag.com",
+            href="https://fernandogarciag.com",
+            className="portfolio-link",
+            target="_blank",
+        ),
         # ── Navigation ─────────────────────────────────────────
         html.Nav(
             id="main-nav",
