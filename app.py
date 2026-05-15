@@ -79,9 +79,15 @@ app.index_string = '''<!DOCTYPE html>
             if (nav && !window._navScrollBound) {
                 window._navScrollBound = true;
                 var hero = document.querySelector('.hero');
+                var heroContent = document.querySelector('.hero-content');
                 window.addEventListener('scroll', function() {
                     if (!hero) return;
                     nav.classList.toggle('visible', hero.getBoundingClientRect().bottom <= 0);
+                    if (heroContent) {
+                        var progress = Math.min(window.scrollY / (window.innerHeight * 0.5), 1);
+                        heroContent.style.transform = 'translateY(' + (-progress * 120) + 'px)';
+                        heroContent.style.opacity = 1 - progress;
+                    }
                 }, {passive: true});
             }
             var sections = document.querySelectorAll('[id$="-container"]');
